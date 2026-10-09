@@ -4,7 +4,7 @@ TaskFlow è una piattaforma collaborativa per organizzare progetti di gruppo, at
 
 ## Stato del progetto
 
-È in corso la realizzazione dell’MVP: workspace Bun, API Express, interfaccia React, schema SQLite e primi test automatici sono presenti. Le funzioni elencate in [Definition of Done](dod/README.md) definiscono il rilascio completo.
+MVP locale completo e pronto da provare: workspace Bun, API Express, interfaccia React, persistenza SQLite e test automatici. Funzioni incluse e istruzioni sono nella [Definition of Done](dod/README.md).
 
 ## Stack scelto
 

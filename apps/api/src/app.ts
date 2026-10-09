@@ -1,4 +1,4 @@
-import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -78,13 +78,6 @@ const upload = multer({
 
 export function createApp(db: AppDatabase, io: SocketServer | null = null) {
   const app = express();
-  const auth: RequestHandler = (req, res, next) => requireAuth(req as AuthRequest, res, (error?: unknown) => {
-    if (error) return next(error);
-    const user = db.query<User & { blocked_at: string | null }, any[]>('SELECT id, display_name, email, role, blocked_at FROM users WHERE id = ?').get((req as AuthRequest).user!.id);
-    if (!user || user.blocked_at) return fail(res, 401, 'UNAUTHORIZED', 'Account non disponibile.');
-    (req as AuthRequest).user = user;
-    next();
-  });
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.use((req, res, next) => {

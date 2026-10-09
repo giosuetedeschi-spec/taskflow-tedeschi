@@ -74,6 +74,20 @@ describe('account and project board API', () => {
     expect(history.body.items[0].text).toBe('Ciao team');
   });
 
+  it('validates local covers and attachments and restricts file downloads to members', async () => {
+    const owner = await account('owner@example.test');
+    const outsider = await account('outsider@example.test');
+    const project = await request(app).post('/api/v1/projects').set(auth(owner.token)).send({ name: 'Files' }).expect(201);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    await request(app).post(`/api/v1/projects/${project.body.id}/cover`).set(auth(owner.token)).attach('cover', png, { filename: 'cover.png', contentType: 'image/png' }).expect(200);
+    await request(app).post(`/api/v1/projects/${project.body.id}/cover`).set(auth(owner.token)).attach('cover', Buffer.from('not an image'), { filename: 'fake.png', contentType: 'image/png' }).expect(422);
+    const message = await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'File allegato').attach('file', Buffer.from('testo locale'), { filename: 'note.txt', contentType: 'text/plain' }).expect(201);
+    const attachmentId = message.body.attachments[0].id;
+    await request(app).get(`/api/v1/attachments/${attachmentId}/download`).set(auth(outsider.token)).expect(404);
+    await request(app).get(`/api/v1/attachments/${attachmentId}/download`).set(auth(owner.token)).expect(200);
+    await request(app).delete(`/api/v1/projects/${project.body.id}`).set(auth(owner.token)).expect(204);
+  });
+
   it('revokes invite links and transfers project ownership only after acceptance', async () => {
     const owner = await account('owner@example.test');
     const member = await account('member@example.test');
@@ -88,7 +102,10 @@ describe('account and project board API', () => {
     const members = await request(app).get(`/api/v1/projects/${project.body.id}/members`).set(auth(member.token)).expect(200);
     expect(members.body.find((row: { id: number }) => row.id === member.user.id).is_owner).toBe(1);
     await request(app).post(`/api/v1/projects/${project.body.id}/leave`).set(auth(owner.token)).expect(204);
+    const pendingInvite = await request(app).post(`/api/v1/projects/${project.body.id}/invites`).set(auth(member.token)).expect(201);
+    const pendingToken = pendingInvite.body.link.split('/').pop();
     await request(app).post(`/api/v1/projects/${project.body.id}/invites/revoke`).set(auth(member.token)).expect(200);
+    await request(app).post(`/api/v1/invites/${pendingToken}/accept`).set(auth((await account('pending@example.test')).token)).expect(404);
   });
 
   it('keeps archived projects read only and revokes their outstanding invites', async () => {

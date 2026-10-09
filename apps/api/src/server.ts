@@ -14,7 +14,7 @@ io.attach(server);
 
 io.use((socket, next) => {
   const user = verifyAccessToken(socket.handshake.auth?.token ?? '');
-  const current = user && db.query<{ id: number; role: string; token_version: number }, any[]>('SELECT id, role, token_version FROM users WHERE id = ? AND blocked_at IS NULL').get(user.id);
+  const current = user && db.query<{ id: number; role: 'user' | 'admin'; token_version: number }, any[]>('SELECT id, role, token_version FROM users WHERE id = ? AND blocked_at IS NULL').get(user.id);
   if (!user || !current || current.token_version !== user.token_version) return next(new Error('unauthorized'));
   user.role = current.role;
   socket.data.user = user;
