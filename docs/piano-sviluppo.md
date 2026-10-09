@@ -1,24 +1,24 @@
-# Piano di sviluppo proposto
+# Piano di sviluppo
 
-L'ordine segue le dipendenze funzionali: prima le decisioni che evitano rifacimenti, poi fondamenta e flussi dati, quindi collaborazione live e rifinitura. Le fasi possono essere ricalibrate quando saranno noti stack e criteri di valutazione.
+Workspace e decisioni di prodotto sono avviati; procedere per vertical slice fino a soddisfare la [Definition of Done](../dod/README.md).
 
 La consegna è prevista entro l'8 novembre 2026. La pianificazione dovrà riservare tempo anche a stabilità, documentazione e preparazione della presentazione, che fanno parte della valutazione.
 
 ## Fase 0 - Chiarire le decisioni bloccanti
 
 - Ricontrollare le ultime versioni stabili dello stack documentate nei requisiti e fissarle nel lockfile Bun.
-- Definire i nomi degli eventi Socket.IO e i relativi payload JSON.
-- Definire requisiti di corso/consegna, modalità di deploy e gestione immagini.
-- Decidere inviti, cancellazione/archiviazione e flusso di segnalazione.
-- Scrivere una prima bozza di schema dati, API e variabili d'ambiente.
+- Tradurre le [decisioni adottate](decisioni-e-domande.md) nello schema SQLite versionato e nel contratto delle API REST.
+- Creare workspace Bun con frontend, backend e contratti condivisi.
+- Definire `.env.example`, CORS locale, directory file e creazione iniziale dell'admin.
+- Configurare `bun:test` e Supertest per le API, Vitest e React Testing Library per l’interfaccia.
 
 **Uscita:** stack e regole principali fissati; ambiente locale avviabile.
 
 ## Fase 1 - Fondamenta applicative e account
 
-- Creare struttura TypeScript per frontend React e backend Express, configurazione locale e collegamento MySQL tramite Sequelize.
-- Definire `package.json`, script Bun e convenzioni per aggiungere/aggiornare dipendenze TypeScript; npm è ignorato per ora.
-- Scegliere il framework di test dopo aver definito la struttura effettiva di frontend e backend.
+- Creare struttura TypeScript per frontend React e backend Express, configurazione locale e accesso SQLite tramite `bun:sqlite`.
+- Definire `package.json`, script Bun e convenzioni per aggiungere/aggiornare dipendenze TypeScript; Bun è la scelta definitiva e il requisito relativo a npm è intenzionalmente trascurato.
+- Configurare gli strumenti di test scelti dopo aver definito la struttura effettiva di frontend e backend.
 - Implementare validazione input, gestione errori e logging essenziali.
 - Implementare registrazione, login, logout e protezione JWT.
 - Introdurre ruoli e controlli di autorizzazione lato API.
@@ -30,7 +30,7 @@ La consegna è prevista entro l'8 novembre 2026. La pianificazione dovrà riserv
 - Creare, leggere, modificare, archiviare e cancellare progetti secondo le regole concordate.
 - Implementare visibilità pubblica/privata e controllo del proprietario.
 - Implementare inviti, accettazione e rimozione membri.
-- Salvare categoria, tecnologie e metadati della copertina.
+- Salvare categoria, tecnologie e percorso locale del file copertina.
 
 **Dipendenza:** account e autorizzazioni.
 
@@ -56,7 +56,7 @@ La consegna è prevista entro l'8 novembre 2026. La pianificazione dovrà riserv
 - Implementare chat di progetto con storico e controllo accessi.
 - Aggiungere eventi Socket.IO per creazione, modifica e spostamento task.
 - Aggiungere notifiche per assegnazioni e ingresso di nuovi membri.
-- Definire persistenza, lettura e consegna degli eventi secondo le decisioni aperte.
+- Implementare schema e destinatari degli eventi secondo le decisioni e i casi in `tests/`.
 
 **Dipendenza:** membership, task e protocollo live scelto.
 
@@ -65,7 +65,7 @@ La consegna è prevista entro l'8 novembre 2026. La pianificazione dovrà riserv
 - Implementare invio e consultazione delle segnalazioni.
 - Implementare moderazione dei progetti e blocco utenti.
 - Inviare notifiche live agli admin sulle nuove segnalazioni.
-- Verificare i permessi admin e registrare le azioni rilevanti, se richiesto.
+- Verificare i permessi admin e registrare revisore, esito e date nel flusso di segnalazione; non è previsto un audit log separato.
 
 **Dipendenza:** account, progetti e flusso segnalazioni definito.
 

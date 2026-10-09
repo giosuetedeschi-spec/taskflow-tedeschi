@@ -1,7 +1,36 @@
 # Backend — progetti e membership
 
 - Solo un utente autenticato può creare un progetto; il creatore ne diventa l'unico proprietario.
+- Sono accettate copertine `.png` e `.jpg` fino a 5 MB; un file più grande viene rifiutato con HTTP 413.
 - Un progetto privato non è leggibile da un utente esterno; i membri autorizzati possono leggerlo.
-- Inviti via email e link restano in attesa finché il destinatario non li accetta; i link non scadono.
-- Solo il proprietario può modificare impostazioni, gestire membri, archiviare o cancellare il progetto.
-- La cancellazione elimina membership, task e messaggi collegati, ma conserva gli account; l'archiviazione conserva i dati.
+- I non membri possono leggere i dettagli e la copertina di un progetto pubblico, ma non task, chat o allegati.
+- Un utente registrato può unirsi autonomamente a un progetto pubblico.
+- Inviti via email e link restano attivi senza scadenza finché accettati o revocati; il link può essere usato da più persone e revocato dal proprietario. L'accettazione emette `member.joined` ai destinatari autorizzati.
+- Solo un account registrato può accettare un invito; l'invito email è accettabile solo dall'account con l'indirizzo destinatario.
+- Accettare un invito quando l'utente è già membro non crea una membership duplicata.
+- Un progetto archiviato rifiuta l'accettazione di inviti.
+- Un progetto archiviato non compare nel catalogo, resta consultabile dai membri in sola lettura e rifiuta la creazione di nuovi inviti.
+- L'archiviazione revoca definitivamente inviti email e link esistenti; alla riattivazione serve un nuovo invito o link.
+- Un utente non può unirsi autonomamente a un progetto pubblico mentre è archiviato.
+- I membri possono scaricare gli allegati esistenti; il proprietario può aggiornare descrizione e copertina durante l'archiviazione.
+- Durante l'archiviazione il proprietario non può modificare titolo, categoria o tecnologie; nessuno può creare, modificare, spostare, assegnare o eliminare task.
+- Il proprietario può cancellare definitivamente il progetto anche se archiviato.
+- Dopo la riattivazione, catalogo, modifiche e inviti tornano disponibili secondo visibilità e permessi normali.
+- Accettare il link chiude gli inviti email pendenti dello stesso utente per il progetto.
+- Dopo la revoca del link, il proprietario può generarne uno nuovo; il vecchio resta inutilizzabile.
+- Il payload `member.joined` include ID e nome visualizzato del nuovo membro, senza email.
+- In sviluppo, il mock stampa destinatario, oggetto e link d'invito nel terminale senza invio SMTP.
+- Solo il proprietario può modificare impostazioni, gestire membri, archiviare, riattivare o cancellare il progetto.
+- Il proprietario può trasferire la proprietà solo a un membro attivo; il destinatario deve accettare e il precedente proprietario diventa membro ordinario.
+- Il proprietario non può lasciare il progetto prima del trasferimento; un progetto attivo conserva sempre un solo proprietario.
+- Il trasferimento si completa in una transazione solo dopo l'accettazione REST del membro attivo; un progetto archiviato rifiuta il trasferimento e un errore non lascia due proprietari o nessun proprietario.
+- Quando il proprietario rimuove un membro, accesso API e Socket.IO sono revocati subito; il rimosso non può auto-iscriversi di nuovo, nemmeno se il progetto è pubblico.
+- Un membro può lasciare autonomamente il progetto; anche in questo caso accesso API e Socket.IO sono revocati subito e non può auto-iscriversi di nuovo.
+- Il proprietario può invitare di nuovo un membro rimosso; l'accettazione crea un nuovo periodo di membership senza duplicare una membership attiva.
+- Messaggi e allegati del membro rimosso restano visibili agli altri membri.
+- Uscita volontaria e rimozione emettono `member.left` ai membri rimasti, con ID, nome visualizzato e causa, senza email.
+- La cancellazione elimina membership, task, messaggi, copertina e allegati dal filesystem, ma conserva gli account; l'archiviazione conserva i dati e i file.
+- Quando si sostituisce la copertina, il vecchio file viene rimosso solo dopo il salvataggio riuscito del nuovo.
+- Copertine con estensione o MIME dichiarati non coerenti con il contenuto reale, o dal formato ambiguo, vengono rifiutate.
+- La copertina di un progetto pubblico è visibile a tutti; quella di un progetto privato è accessibile solo ai membri.
+- Il limite della copertina è 5 MiB (5.242.880 byte); oltre il limite la risposta è HTTP 413.
