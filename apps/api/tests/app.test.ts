@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import request from 'supertest';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp } from '../src/app';
 import { openDatabase } from '../src/db';
 import { issueAccessToken, type User } from '../src/auth';
@@ -7,6 +10,7 @@ import type { AppDatabase } from '../src/db';
 
 let db: AppDatabase;
 let app: ReturnType<typeof createApp>;
+let testUploads: string;
 
 async function account(email: string, displayName = 'Test User', role: 'user' | 'admin' = 'user') {
   const password = await Bun.password.hash('correct horse battery');
@@ -17,8 +21,8 @@ async function account(email: string, displayName = 'Test User', role: 'user' | 
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-beforeEach(() => { db = openDatabase(':memory:'); app = createApp(db); });
-afterEach(() => db.close());
+beforeEach(() => { testUploads = mkdtempSync(join(tmpdir(), 'taskflow-api-test-')); db = openDatabase(':memory:'); app = createApp(db, null, testUploads); });
+afterEach(() => { db.close(); rmSync(testUploads, { recursive: true, force: true }); });
 
 describe('account and project board API', () => {
   it('registers, authenticates and rotates a refresh session', async () => {
@@ -60,6 +64,31 @@ describe('account and project board API', () => {
     await request(app).patch(`/api/v1/tasks/${task.body.id}`).set(auth(owner.token)).send({ status: 'blocked' }).expect(422);
   });
 
+  it('shows assigned tasks in due-date order and filters the public catalog', async () => {
+    const owner = await account('dashboard@example.test');
+    const catalogOwner = await account('catalog@example.test');
+    const owned = await request(app).post('/api/v1/projects').set(auth(owner.token)).send({ name: 'My board' }).expect(201);
+    await request(app).post(`/api/v1/projects/${owned.body.id}/tasks`).set(auth(owner.token)).send({ title: 'Senza scadenza' }).expect(201);
+    await request(app).post(`/api/v1/projects/${owned.body.id}/tasks`).set(auth(owner.token)).send({ title: 'Più avanti', assigneeId: owner.user.id, dueDate: '2026-10-20' }).expect(201);
+    await request(app).post(`/api/v1/projects/${owned.body.id}/tasks`).set(auth(owner.token)).send({ title: 'Prima', assigneeId: owner.user.id, dueDate: '2026-10-11' }).expect(201);
+    for (const project of [
+      { name: 'Design React', category: 'Design', technologies: 'React, SQLite' },
+      { name: 'Design Vue', category: 'Design', technologies: 'Vue' },
+      { name: 'Engineering React', category: 'Engineering', technologies: 'React' },
+    ]) await request(app).post('/api/v1/projects').set(auth(catalogOwner.token)).send({ ...project, visibility: 'public' }).expect(201);
+
+    const dashboard = await request(app).get('/api/v1/dashboard').set(auth(owner.token)).expect(200);
+    expect(dashboard.body.createdProjects).toHaveLength(1);
+    expect(dashboard.body.joinedProjects).toHaveLength(0);
+    expect(dashboard.body.assignedTasks.map((task: { title: string }) => task.title)).toEqual(['Prima', 'Più avanti']);
+    const filtered = await request(app).get('/api/v1/projects?category=design&technology=react').set(auth(owner.token)).expect(200);
+    expect(filtered.body.catalog.map((project: { name: string }) => project.name)).toEqual(['Design React']);
+    const tomorrow = new Date(Date.now() + 86400_000).toISOString().slice(0, 10);
+    const futureOnly = await request(app).get(`/api/v1/projects?createdFrom=${tomorrow}`).set(auth(owner.token)).expect(200);
+    expect(futureOnly.body.catalog).toHaveLength(0);
+    await request(app).get('/api/v1/projects?createdFrom=2026-10-21&createdTo=2026-10-20').set(auth(owner.token)).expect(422);
+  });
+
   it('shares an invite link, accepts it and persists member chat', async () => {
     const owner = await account('owner@example.test');
     const guest = await account('guest@example.test');
@@ -81,11 +110,27 @@ describe('account and project board API', () => {
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
     await request(app).post(`/api/v1/projects/${project.body.id}/cover`).set(auth(owner.token)).attach('cover', png, { filename: 'cover.png', contentType: 'image/png' }).expect(200);
     await request(app).post(`/api/v1/projects/${project.body.id}/cover`).set(auth(owner.token)).attach('cover', Buffer.from('not an image'), { filename: 'fake.png', contentType: 'image/png' }).expect(422);
-    const message = await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'File allegato').attach('file', Buffer.from('testo locale'), { filename: 'note.txt', contentType: 'text/plain' }).expect(201);
+    const messageRequest = request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'Cinque file allegati');
+    for (let index = 1; index <= 5; index++) messageRequest.attach('files', Buffer.from(`nota ${index}`), { filename: `note-${index}.txt`, contentType: 'text/plain' });
+    const message = await messageRequest.expect(201);
+    expect(message.body.attachments).toHaveLength(5);
     const attachmentId = message.body.attachments[0].id;
     await request(app).get(`/api/v1/attachments/${attachmentId}/download`).set(auth(outsider.token)).expect(404);
     await request(app).get(`/api/v1/attachments/${attachmentId}/download`).set(auth(owner.token)).expect(200);
+    await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(outsider.token)).field('text', 'Non autorizzato').attach('files', Buffer.from('nota'), { filename: 'private.txt', contentType: 'text/plain' }).expect(404);
+    const tooMany = request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'Troppi allegati');
+    for (let index = 1; index <= 6; index++) tooMany.attach('files', Buffer.from(`nota ${index}`), { filename: `troppo-${index}.txt`, contentType: 'text/plain' });
+    await tooMany.expect(422);
+    await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'Testo troppo grande').attach('files', Buffer.alloc(1024 * 1024 + 1, 0x61), { filename: 'large.txt', contentType: 'text/plain' }).expect(413);
+    const oversizedPdf = Buffer.alloc(5 * 1024 * 1024 + 1, 0x20); Buffer.from('%PDF-', 'ascii').copy(oversizedPdf);
+    await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'PDF troppo grande').attach('files', oversizedPdf, { filename: 'large.pdf', contentType: 'application/pdf' }).expect(413);
+    await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).field('text', 'Un allegato non valido invalida il messaggio').attach('files', Buffer.from('valido'), { filename: 'valid.txt', contentType: 'text/plain' }).attach('files', Buffer.from('non è un png'), { filename: 'fake.png', contentType: 'image/png' }).expect(422);
+    const history = await request(app).get(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).expect(200);
+    expect(history.body.items).toHaveLength(1);
+    expect(history.body.items[0].attachments).toHaveLength(5);
+    expect(readdirSync(join(testUploads, 'attachments'))).toHaveLength(5);
     await request(app).delete(`/api/v1/projects/${project.body.id}`).set(auth(owner.token)).expect(204);
+    expect(readdirSync(join(testUploads, 'attachments'))).toHaveLength(0);
   });
 
   it('revokes invite links and transfers project ownership only after acceptance', async () => {

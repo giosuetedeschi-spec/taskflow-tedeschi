@@ -1,0 +1,91 @@
+{
+  "info": {
+    "_postman_id": "f2efb87a-4d72-4a54-a650-57b7d93403b8",
+    "name": "TaskFlow API — local MVP",
+    "description": "Flussi REST TaskFlow per Bun/SQLite locale. Vedi postman/README.md per seed, credenziali, ordine e file di esempio.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }] },
+  "item": [
+    {
+      "name": "00 — Servizio",
+      "item": [
+        { "name": "Health", "request": { "method": "GET", "url": "{{baseUrl}}/health", "auth": { "type": "noauth" } } }
+      ]
+    },
+    {
+      "name": "01 — Accesso",
+      "item": [
+        { "name": "Registra nuovo account (email di esempio)", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"{{newUserName}}\",\n  \"email\": \"{{newUserEmail}}\",\n  \"password\": \"{{newUserPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/auth/register", "auth": { "type": "noauth" } }, "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["pm.environment.set('newUserEmail', `postman.${Date.now()}@example.test`);"] } }, { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.environment.set('newUserToken', pm.response.json().accessToken);"] } }] },
+        { "name": "Login Ada demo", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/auth/login", "auth": { "type": "noauth" } }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('login riuscito', () => pm.response.to.have.status(200));", "pm.environment.set('accessToken', pm.response.json().accessToken);"] } }] },
+        { "name": "Login Luca demo", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{memberEmail}}\",\n  \"password\": \"{{memberPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/auth/login", "auth": { "type": "noauth" } }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('login membro riuscito', () => pm.response.to.have.status(200));", "pm.environment.set('memberToken', pm.response.json().accessToken);"] } }] },
+        { "name": "Login admin demo", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/auth/login", "auth": { "type": "noauth" } }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('login admin riuscito', () => pm.response.to.have.status(200));", "pm.environment.set('adminToken', pm.response.json().accessToken);"] } }] },
+        { "name": "Profilo corrente", "request": { "method": "GET", "url": "{{baseUrl}}/auth/me" } },
+        { "name": "Rinnova sessione (cookie HttpOnly del login)", "request": { "method": "POST", "url": "{{baseUrl}}/auth/refresh", "auth": { "type": "noauth" } }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.environment.set('accessToken', pm.response.json().accessToken);"] } }] },
+        { "name": "Logout", "request": { "method": "POST", "url": "{{baseUrl}}/auth/logout" } },
+        { "name": "Richiedi recupero password (link nel terminale API)", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{ownerEmail}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/auth/forgot", "auth": { "type": "noauth" } } },
+        { "name": "Imposta nuova password (inserire resetToken)", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"password\": \"NuovaPasswordDemo-2026\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/auth/reset/{{resetToken}}", "auth": { "type": "noauth" } } }
+      ]
+    },
+    {
+      "name": "02 — Dashboard e catalogo",
+      "item": [
+        { "name": "Dashboard personale", "request": { "method": "GET", "url": "{{baseUrl}}/dashboard" } },
+        { "name": "Progetti e catalogo (salva ID demo)", "request": { "method": "GET", "url": "{{baseUrl}}/projects" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const body = pm.response.json();", "if (body.projects?.length) pm.environment.set('projectId', body.projects[0].id);", "if (body.catalog?.length) pm.environment.set('catalogProjectId', body.catalog[0].id);"] } }] },
+        { "name": "Filtra catalogo: Design + React + date", "request": { "method": "GET", "url": "{{baseUrl}}/projects?category=Design&technology=React&createdFrom={{createdFrom}}&createdTo={{createdTo}}" } },
+        { "name": "Dettagli progetto pubblico", "request": { "method": "GET", "url": "{{baseUrl}}/projects/{{catalogProjectId}}" } },
+        { "name": "Unisciti al progetto pubblico demo", "request": { "method": "POST", "url": "{{baseUrl}}/projects/{{catalogProjectId}}/join" } }
+      ]
+    },
+    {
+      "name": "03 — Progetti e membri",
+      "item": [
+        { "name": "Crea progetto pubblico", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Progetto Postman demo\",\n  \"description\": \"Progetto fittizio creato dalla collection\",\n  \"category\": \"Design\",\n  \"technologies\": \"React, SQLite\",\n  \"visibility\": \"public\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/projects" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('progetto creato', () => pm.response.to.have.status(201));", "pm.environment.set('projectId', pm.response.json().id);"] } }] },
+        { "name": "Dettagli progetto", "request": { "method": "GET", "url": "{{baseUrl}}/projects/{{projectId}}" } },
+        { "name": "Modifica progetto", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"description\": \"Descrizione aggiornata dalla collection\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/projects/{{projectId}}" } },
+        { "name": "Carica copertina PNG (scegli samples/copertina-demo.png)", "request": { "method": "POST", "body": { "mode": "formdata", "formdata": [{ "key": "cover", "type": "file", "src": "./samples/copertina-demo.png" }] }, "url": "{{baseUrl}}/projects/{{projectId}}/cover" } },
+        { "name": "Elenco membri (salva ID Luca)", "request": { "method": "GET", "url": "{{baseUrl}}/projects/{{projectId}}/members" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const member = pm.response.json().find((item) => item.email === pm.environment.get('memberEmail'));", "if (member) pm.environment.set('memberId', member.id);"] } }] },
+        { "name": "Crea invito per Luca", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{memberEmail}}\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/projects/{{projectId}}/invites" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const link = pm.response.json().link;", "pm.environment.set('inviteToken', new URL(link).pathname.split('/').pop());"] } }] },
+        { "name": "Accetta invito (token membro)", "request": { "method": "POST", "url": "{{baseUrl}}/invites/{{inviteToken}}/accept", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{memberToken}}", "type": "string" }] } } },
+        { "name": "Aggiorna ID membro demo", "request": { "method": "GET", "url": "{{baseUrl}}/projects/{{projectId}}/members" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const member = pm.response.json().find((item) => item.email === pm.environment.get('memberEmail'));", "if (member) pm.environment.set('memberId', member.id);"] } }] },
+        { "name": "Revoca inviti attivi", "request": { "method": "POST", "url": "{{baseUrl}}/projects/{{projectId}}/invites/revoke" } },
+        { "name": "Rimuovi Luca dal progetto (se membro)", "request": { "method": "DELETE", "url": "{{baseUrl}}/projects/{{projectId}}/members/{{memberId}}" } },
+        { "name": "Proponi trasferimento a Luca", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"memberId\": {{memberId}}\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/projects/{{projectId}}/transfer" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const link = pm.response.json().link;", "pm.environment.set('transferToken', new URL(link).pathname.split('/').pop());"] } }] },
+        { "name": "Accetta trasferimento (token membro)", "request": { "method": "POST", "url": "{{baseUrl}}/transfers/{{transferToken}}/accept", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{memberToken}}", "type": "string" }] } } },
+        { "name": "Lascia progetto (token membro)", "request": { "method": "POST", "url": "{{baseUrl}}/projects/{{projectId}}/leave", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{memberToken}}", "type": "string" }] } } },
+        { "name": "Archivia progetto", "request": { "method": "POST", "url": "{{baseUrl}}/projects/{{projectId}}/archive" } },
+        { "name": "Riattiva progetto", "request": { "method": "POST", "url": "{{baseUrl}}/projects/{{projectId}}/restore" } },
+        { "name": "Elimina progetto (irreversibile)", "request": { "method": "DELETE", "url": "{{baseUrl}}/projects/{{projectId}}" } }
+      ]
+    },
+    {
+      "name": "04 — Task",
+      "item": [
+        { "name": "Elenco task", "request": { "method": "GET", "url": "{{baseUrl}}/projects/{{projectId}}/tasks" } },
+        { "name": "Crea task (salva taskId)", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"title\": \"Task creato da Postman\",\n  \"description\": \"Task fittizio per provare la board\",\n  \"priority\": \"high\",\n  \"dueDate\": \"{{dueDate}}\",\n  \"assigneeId\": {{memberId}}\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/projects/{{projectId}}/tasks" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.environment.set('taskId', pm.response.json().id);"] } }] },
+        { "name": "Sposta e aggiorna task", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"status\": \"doing\",\n  \"priority\": \"medium\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/tasks/{{taskId}}" } },
+        { "name": "Elimina task", "request": { "method": "DELETE", "url": "{{baseUrl}}/tasks/{{taskId}}" } }
+      ]
+    },
+    {
+      "name": "05 — Chat e allegati",
+      "item": [
+        { "name": "Cronologia chat", "request": { "method": "GET", "url": "{{baseUrl}}/projects/{{projectId}}/messages" } },
+        { "name": "Invia messaggio con più allegati (scegli i 2 TXT demo)", "request": { "method": "POST", "body": { "mode": "formdata", "formdata": [{ "key": "text", "value": "Messaggio di prova con più allegati", "type": "text" }, { "key": "files", "type": "file", "src": "./samples/nota-demo.txt" }, { "key": "files", "type": "file", "src": "./samples/piano-demo.txt" }] }, "url": "{{baseUrl}}/projects/{{projectId}}/messages" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const files = pm.response.json().attachments || [];", "if (files.length) pm.environment.set('attachmentId', files[0].id);", "pm.test('due allegati salvati', () => pm.expect(files.length).to.eql(2));"] } }] },
+        { "name": "Scarica allegato", "request": { "method": "GET", "url": "{{baseUrl}}/attachments/{{attachmentId}}/download" } }
+      ]
+    },
+    {
+      "name": "06 — Segnalazioni e moderazione",
+      "item": [
+        { "name": "Segnala progetto demo", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"category\": \"other\",\n  \"details\": \"Segnalazione di prova\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/projects/{{projectId}}/reports" }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.environment.set('reportId', pm.response.json().id);"] } }] },
+        { "name": "Elenco segnalazioni (token admin)", "request": { "method": "GET", "url": "{{baseUrl}}/admin/reports", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] } } },
+        { "name": "Chiudi segnalazione demo", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"status\": \"rejected\"\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/admin/reports/{{reportId}}", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] } } },
+        { "name": "Progetti nascosti", "request": { "method": "GET", "url": "{{baseUrl}}/admin/hidden-projects", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] } }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const hidden = pm.response.json()[0];", "if (hidden) pm.environment.set('hiddenProjectId', hidden.id);"] } }] },
+        { "name": "Ripristina progetto nascosto", "request": { "method": "POST", "url": "{{baseUrl}}/admin/projects/{{hiddenProjectId}}/restore", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] } } },
+        { "name": "Account bloccati", "request": { "method": "GET", "url": "{{baseUrl}}/admin/blocked-users", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] } }, "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["const blocked = pm.response.json()[0];", "if (blocked) pm.environment.set('blockedUserId', blocked.id);"] } }] },
+        { "name": "Sblocca utente", "request": { "method": "POST", "url": "{{baseUrl}}/admin/users/{{blockedUserId}}/unblock", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] } } }
+      ]
+    }
+  ]
+}

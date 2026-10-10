@@ -43,11 +43,13 @@ Ambiente richiesto: Windows e Bun 1.4 o successivo. Database e allegati sono loc
 
 ```powershell
 bun install
-bun run seed:admin   # facoltativo: crea l’account amministratore
+bun run seed:demo    # facoltativo: crea utenti e dati demo fittizi
+bun run seed:admin   # facoltativo: crea un admin con credenziali proprie
 bun run dev
 ```
 
 Aprire <http://localhost:5173>. Il mock email mostra nel terminale API i link di invito e recupero password.
+Il seed demo è solo locale e usa account `@example.test`; credenziali e flusso Postman sono in [postman/README.md](postman/README.md).
 
 ## Consegna
 

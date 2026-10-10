@@ -10,9 +10,7 @@ import { AuthRequest, clearRefreshCookie, hashToken, issueAccessToken, newOpaque
 import type { AppDatabase } from './db';
 
 const api = '/api/v1';
-const uploadsRoot = process.env.UPLOADS_DIR ?? join(import.meta.dir, '../../../uploads');
-mkdirSync(join(uploadsRoot, 'covers'), { recursive: true });
-mkdirSync(join(uploadsRoot, 'attachments'), { recursive: true });
+const defaultUploadsRoot = process.env.UPLOADS_DIR ?? join(import.meta.dir, '../../../uploads');
 
 type Project = { id: number; owner_id: number; name: string; description: string; visibility: string; archived_at: string | null; hidden_at: string | null; cover_path: string | null };
 type EventName = 'task.created' | 'task.updated' | 'task.moved' | 'task.assigned' | 'member.joined' | 'member.left' | 'project.owner.transferred' | 'chat.message.created' | 'report.created' | 'project.updated';
@@ -66,17 +64,24 @@ function actualMime(path: string, declared: string) {
   return null;
 }
 
-const disk = multer.diskStorage({
-  destination: (req, _file, cb) => cb(null, join(uploadsRoot, req.path.endsWith('/cover') ? 'covers' : 'attachments')),
-  filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
-});
-const upload = multer({
-  storage: disk,
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, cb) => cb(null, ['.txt', '.png', '.jpg', '.pdf'].includes(extname(file.originalname).toLowerCase())),
-});
+function cleanupUploads(files: Express.Multer.File[]) {
+  for (const file of files) try { unlinkSync(file.path); } catch {}
+}
 
-export function createApp(db: AppDatabase, io: SocketServer | null = null) {
+export function createApp(db: AppDatabase, io: SocketServer | null = null, uploadsRoot = defaultUploadsRoot) {
+  mkdirSync(join(uploadsRoot, 'covers'), { recursive: true });
+  mkdirSync(join(uploadsRoot, 'attachments'), { recursive: true });
+  const disk = multer.diskStorage({
+    destination: (req, _file, cb) => cb(null, join(uploadsRoot, req.path.endsWith('/cover') ? 'covers' : 'attachments')),
+    filename: (_req, file, cb) => cb(null, `${randomUUID()}${extname(file.originalname).toLowerCase()}`),
+  });
+  const upload = multer({
+    storage: disk,
+    limits: { fileSize: 5 * 1024 * 1024, files: 5 },
+    fileFilter: (_req, file, cb) => ['.txt', '.png', '.jpg', '.pdf'].includes(extname(file.originalname).toLowerCase())
+      ? cb(null, true)
+      : cb(new multer.MulterError('LIMIT_UNEXPECTED_FILE', file.fieldname)),
+  });
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
@@ -181,10 +186,36 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null) {
     res.json({ message: 'Password aggiornata. Puoi accedere.' });
   });
 
+  app.get(`${api}/dashboard`, requireAuth, (req: AuthRequest, res) => {
+    const userId = userOf(req).id;
+    const createdProjects = db.query("SELECT p.*, u.display_name AS owner_name, 1 AS is_owner, 'owner' AS role FROM projects p JOIN users u ON u.id = p.owner_id WHERE p.owner_id = ? AND p.hidden_at IS NULL ORDER BY p.updated_at DESC").all(userId);
+    const joinedProjects = db.query("SELECT p.*, u.display_name AS owner_name, 0 AS is_owner, 'member' AS role FROM projects p JOIN users u ON u.id = p.owner_id JOIN memberships m ON m.project_id = p.id WHERE m.user_id = ? AND m.left_at IS NULL AND p.owner_id != ? AND p.hidden_at IS NULL ORDER BY p.updated_at DESC").all(userId, userId);
+    const assignedTasks = db.query(`SELECT t.id, t.project_id, p.name AS project_name, t.title, t.description, t.status, t.priority, t.due_date, t.updated_at
+      FROM tasks t JOIN projects p ON p.id = t.project_id JOIN memberships m ON m.project_id = p.id AND m.user_id = ? AND m.left_at IS NULL
+      WHERE t.assignee_id = ? AND p.hidden_at IS NULL ORDER BY t.due_date IS NULL, t.due_date, t.created_at`).all(userId, userId);
+    res.json({ createdProjects, joinedProjects, assignedTasks });
+  });
+
   app.get(`${api}/projects`, requireAuth, (req: AuthRequest, res) => {
     const id = userOf(req).id;
+    const filters = z.object({
+      category: z.string().trim().max(60).optional(),
+      technology: z.string().trim().max(80).optional(),
+      createdFrom: z.iso.date().optional(),
+      createdTo: z.iso.date().optional(),
+    }).safeParse(req.query);
+    if (!filters.success || (filters.data.createdFrom && filters.data.createdTo && filters.data.createdFrom > filters.data.createdTo)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'Filtri catalogo non validi.');
+    }
     const projects = db.query('SELECT DISTINCT p.*, u.display_name AS owner_name, (p.owner_id = ?) AS is_owner FROM projects p LEFT JOIN memberships m ON m.project_id = p.id LEFT JOIN users u ON u.id = p.owner_id WHERE p.owner_id = ? OR (m.user_id = ? AND m.left_at IS NULL) ORDER BY p.updated_at DESC').all(id, id, id);
-    const catalog = db.query("SELECT p.id, p.name, p.description, p.category, p.technologies, p.cover_path, p.created_at, u.display_name AS owner_name FROM projects p JOIN users u ON u.id = p.owner_id WHERE p.visibility = 'public' AND p.archived_at IS NULL AND p.hidden_at IS NULL AND p.owner_id != ? AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.project_id = p.id AND m.user_id = ? AND m.left_at IS NULL) ORDER BY p.created_at DESC").all(id, id);
+    const { category = '', technology = '', createdFrom = '', createdTo = '' } = filters.data;
+    const catalog = db.query(`SELECT p.id, p.name, p.description, p.category, p.technologies, p.cover_path, p.created_at, u.display_name AS owner_name
+      FROM projects p JOIN users u ON u.id = p.owner_id
+      WHERE p.visibility = 'public' AND p.archived_at IS NULL AND p.hidden_at IS NULL AND p.owner_id != ?
+      AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.project_id = p.id AND m.user_id = ? AND m.left_at IS NULL)
+      AND (? = '' OR p.category = ? COLLATE NOCASE) AND (? = '' OR instr(lower(p.technologies), lower(?)) > 0)
+      AND (? = '' OR date(p.created_at) >= date(?)) AND (? = '' OR date(p.created_at) <= date(?)) ORDER BY p.created_at DESC`)
+      .all(id, id, category, category, technology, technology, createdFrom, createdFrom, createdTo, createdTo);
     res.json({ projects, catalog });
   });
 
@@ -391,18 +422,24 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null) {
     const messages = rows.map((m) => ({ ...m, attachments: db.query('SELECT id, original_name, mime_type, size FROM attachments WHERE message_id = ?').all(m.id) }));
     res.json({ items: messages, nextCursor: rows.length === 50 ? rows[0].id : null });
   });
-  app.post(`${api}/projects/:id/messages`, requireAuth, upload.single('file'), (req: AuthRequest, res) => {
+  app.post(`${api}/projects/:id/messages`, requireAuth, upload.array('files', 5), (req: AuthRequest, res) => {
     const id = Number(req.params.id); const access = mustMember(db, req, res, id);
-    if (!access || !mutableProject(access.project, res)) { if (req.file) unlinkSync(req.file.path); return; }
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!access || !mutableProject(access.project, res)) { cleanupUploads(files); return; }
     const data = parse(messageInputSchema, { text: req.body?.text }, res);
-    if (!data) { if (req.file) unlinkSync(req.file.path); return; }
-    if (req.file) {
-      const ext = extname(req.file.originalname).toLowerCase();
-      if ((ext === '.txt' && req.file.size > 1024 * 1024) || !actualMime(req.file.path, req.file.mimetype)) { unlinkSync(req.file.path); return fail(res, 422, 'FILE_INVALID', 'Formato o dimensione del file non consentiti.'); }
-    }
-    const result = db.query('INSERT INTO messages (project_id, user_id, text) VALUES (?, ?, ?)').run(id, userOf(req).id, data.text);
-    const messageId = Number(result.lastInsertRowid);
-    if (req.file) db.query('INSERT INTO attachments (message_id, original_name, mime_type, size, disk_name) VALUES (?, ?, ?, ?, ?)').run(messageId, req.file.originalname, actualMime(req.file.path, req.file.mimetype), req.file.size, req.file.filename);
+    if (!data) { cleanupUploads(files); return; }
+    const detectedTypes = files.map((file) => actualMime(file.path, file.mimetype));
+    if (files.some((file) => extname(file.originalname).toLowerCase() === '.txt' && file.size > 1024 * 1024)) { cleanupUploads(files); return fail(res, 413, 'FILE_TOO_LARGE', 'Un allegato TXT supera il limite di 1 MiB.'); }
+    if (detectedTypes.some((type) => !type)) { cleanupUploads(files); return fail(res, 422, 'FILE_INVALID', 'Formato o MIME dichiarato di un allegato non valido.'); }
+    let messageId: number;
+    try {
+      messageId = Number(db.transaction(() => {
+        const result = db.query('INSERT INTO messages (project_id, user_id, text) VALUES (?, ?, ?)').run(id, userOf(req).id, data.text);
+        const newMessageId = Number(result.lastInsertRowid);
+        files.forEach((file, index) => db.query('INSERT INTO attachments (message_id, original_name, mime_type, size, disk_name) VALUES (?, ?, ?, ?, ?)').run(newMessageId, file.originalname, detectedTypes[index], file.size, file.filename));
+        return newMessageId;
+      })());
+    } catch (error) { cleanupUploads(files); throw error; }
     const message = { id: messageId, project_id: id, user_id: userOf(req).id, author_name: userOf(req).display_name, text: data.text, created_at: new Date().toISOString(), attachments: db.query('SELECT id, original_name, mime_type, size FROM attachments WHERE message_id = ?').all(messageId) };
     event(io, id, 'chat.message.created', message); res.status(201).json(message);
   });
@@ -457,8 +494,11 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null) {
     db.query('UPDATE users SET blocked_at = NULL WHERE id = ?').run(Number(req.params.id)); res.json({ unblocked: true });
   });
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    if (Array.isArray(req.files)) cleanupUploads(req.files as Express.Multer.File[]);
+    if (req.file) cleanupUploads([req.file]);
     if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') return fail(res, 413, 'FILE_TOO_LARGE', 'Il file supera il limite consentito.');
+    if (err instanceof multer.MulterError && ['LIMIT_FILE_COUNT', 'LIMIT_UNEXPECTED_FILE'].includes(err.code)) return fail(res, 422, 'FILE_LIMIT', 'Sono consentiti al massimo cinque allegati e solo i formati previsti.');
     console.error(err);
     fail(res, 500, 'INTERNAL_ERROR', 'Si è verificato un errore. Riprova.');
   });
