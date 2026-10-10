@@ -6,6 +6,24 @@ import { join } from 'node:path';
 import { openDatabase } from '../src/db';
 
 describe('database migrations', () => {
+  it('applies the fresh schema once and can reopen it without changing migration history', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'taskflow-db-test-'));
+    const filename = join(directory, 'fresh.sqlite');
+    let versions: string[][] = [];
+    try {
+      for (let run = 0; run < 2; run++) {
+        const db = openDatabase(filename);
+        try {
+          versions.push(db.query<{ version: string }, any[]>('SELECT version FROM schema_migrations ORDER BY version').all().map(({ version }) => version));
+          const columns = db.query<{ name: string }, any[]>('PRAGMA table_info(users)').all();
+          expect(columns.some(({ name }) => name === 'token_version')).toBe(true);
+        } finally { db.close(); }
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+
+    expect(versions).toEqual([['001-initial', '002-token-version'], ['001-initial', '002-token-version']]);
+  });
+
   it('upgrades an existing 001 database with the session token version field', () => {
     const directory = mkdtempSync(join(tmpdir(), 'taskflow-db-test-'));
     const filename = join(directory, 'legacy.sqlite');

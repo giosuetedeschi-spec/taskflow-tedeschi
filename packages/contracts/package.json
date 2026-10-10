@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "scripts": { "build": "bun build src/index.ts --outdir=dist", "test": "echo no contract tests", "typecheck": "tsc --noEmit -p tsconfig.json" },
+  "scripts": { "build": "bun build src/index.ts --outdir=dist", "test": "bun test", "typecheck": "tsc --noEmit -p tsconfig.json" },
   "dependencies": { "zod": "^4.1.12" }
 }

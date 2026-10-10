@@ -497,6 +497,9 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
   app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (Array.isArray(req.files)) cleanupUploads(req.files as Express.Multer.File[]);
     if (req.file) cleanupUploads([req.file]);
+    const bodyError = err as { type?: string };
+    if (bodyError?.type === 'entity.parse.failed') return fail(res, 400, 'INVALID_JSON', 'Il corpo della richiesta non contiene JSON valido.');
+    if (bodyError?.type === 'entity.too.large') return fail(res, 413, 'REQUEST_TOO_LARGE', 'Il corpo della richiesta supera il limite consentito.');
     if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') return fail(res, 413, 'FILE_TOO_LARGE', 'Il file supera il limite consentito.');
     if (err instanceof multer.MulterError && ['LIMIT_FILE_COUNT', 'LIMIT_UNEXPECTED_FILE'].includes(err.code)) return fail(res, 422, 'FILE_LIMIT', 'Sono consentiti al massimo cinque allegati e solo i formati previsti.');
     console.error(err);
