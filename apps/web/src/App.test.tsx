@@ -7,7 +7,7 @@ vi.mock('socket.io-client', () => ({ io: () => ({ on: vi.fn(), emit: vi.fn(), di
 
 const reply = (body: unknown, status = 200) => new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState({}, '', '/'); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); Reflect.deleteProperty(navigator, 'clipboard'); window.history.replaceState({}, '', '/'); });
 
 describe('TaskFlow app flow', () => {
   it('shows login errors, authenticates, loads the workspace and logs out', async () => {
@@ -39,6 +39,7 @@ describe('TaskFlow app flow', () => {
     await user.type(screen.getByLabelText('Password'), 'correct horse battery');
     await user.click(screen.getByRole('button', { name: 'Accedi' }));
     expect(await screen.findByText('Ciao Ada Demo, ecco cosa succede nei tuoi progetti.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apri elenco progetti' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Esci' }));
     expect(await screen.findByRole('heading', { name: 'Accedi a TaskFlow' })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth/logout', expect.objectContaining({ method: 'POST' }));
@@ -56,6 +57,7 @@ describe('TaskFlow app flow', () => {
       if (path.endsWith('/api/v1/projects') && init?.method === 'POST') return reply(project, 201);
       if (path.endsWith('/api/v1/projects/7/tasks') && init?.method === 'POST') return reply({ id: 21, project_id: 7, title: 'Task creato dalla UI', description: '', status: 'todo', priority: 'medium' }, 201);
       if (path.endsWith('/api/v1/tasks/21') && init?.method === 'PATCH') return reply({ id: 21, project_id: 7, title: 'Task creato dalla UI', description: '', status: 'doing', priority: 'medium' });
+      if (path.endsWith('/api/v1/projects/7/invites') && init?.method === 'POST') return reply({ link: 'http://localhost:5173/invite/demo-token', email: null }, 201);
       if (path.endsWith('/dashboard')) return reply({ createdProjects: [project], joinedProjects: [], assignedTasks: [{ id: 9, project_id: 7, project_name: project.name, title: 'Revisionare il flusso demo', description: '', status: 'todo', priority: 'high', due_date: '2026-10-11' }] });
       if (path.includes('/api/v1/projects?')) return reply({ projects: [project], catalog: [catalogProject] });
       if (path.endsWith('/api/v1/projects')) return reply({ projects: [project], catalog: [] });
@@ -67,6 +69,8 @@ describe('TaskFlow app flow', () => {
       return reply({ error: { message: 'Not found' } }, 404);
     });
     vi.stubGlobal('fetch', fetchMock);
+    const writeClipboard = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: writeClipboard } });
 
     render(<App />);
     await user.click(await screen.findByRole('button', { name: 'Crea un account' }));
@@ -94,14 +98,35 @@ describe('TaskFlow app flow', () => {
       expect(columns[1]).toHaveTextContent('Task creato dalla UI');
       expect(columns[1]?.querySelectorAll('.task-card')).toHaveLength(1);
     });
+    await user.click(screen.getByRole('button', { name: /Membri/ }));
+    await user.click(await screen.findByRole('button', { name: /Crea link di invito/ }));
+    expect(await screen.findByRole('textbox', { name: 'Link invito' })).toHaveValue('http://localhost:5173/invite/demo-token');
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Link creato e copiato negli appunti.');
+    expect(writeClipboard).toHaveBeenCalledWith('http://localhost:5173/invite/demo-token');
+    await user.click(screen.getByRole('button', { name: 'Copia link' }));
+    expect(writeClipboard).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Link copiato negli appunti.');
+    writeClipboard.mockRejectedValueOnce(new Error('Clipboard non disponibile'));
+    await user.click(screen.getByRole('button', { name: 'Copia link' }));
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Seleziona il link e copialo');
+    await user.click(screen.getByRole('button', { name: 'Chiudi' }));
     await user.click(screen.getByRole('button', { name: /Chat/ }));
-    await user.type(screen.getByPlaceholderText('Scrivi un messaggio…'), 'File demo');
+    const chatInput = screen.getByPlaceholderText(/Scrivi un messaggio/);
+    await user.type(chatInput, 'File demo');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    expect(chatInput).toHaveValue('File demo\n');
+    await user.type(chatInput, 'seconda riga');
     const files = [new File(['primo'], 'primo.txt', { type: 'text/plain' }), new File(['secondo'], 'secondo.txt', { type: 'text/plain' })];
     const fileInput = screen.getByLabelText(/Allega fino a 5 file/);
     await user.upload(fileInput, files);
     expect((fileInput as HTMLInputElement).files).toHaveLength(2);
-    await user.click(screen.getByRole('button', { name: 'Invia ↗' }));
+    await user.click(chatInput);
+    await user.keyboard('{Enter}');
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/projects/7/messages'), expect.objectContaining({ method: 'POST', body: expect.any(FormData) })));
+    const sentMessage = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/projects/7/messages') && init?.method === 'POST')?.[1]?.body as FormData;
+    expect(sentMessage.get('text')).toBe('File demo\nseconda riga');
+    expect(window.location.pathname).toBe('/projects/7');
+    expect(chatInput).toHaveValue('');
     await user.click(screen.getByRole('button', { name: 'Chiudi chat' }));
     await user.click(screen.getByRole('button', { name: 'Progetti' }));
     expect(await screen.findByText('Revisionare il flusso demo')).toBeInTheDocument();
