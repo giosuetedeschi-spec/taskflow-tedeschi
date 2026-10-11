@@ -57,7 +57,7 @@ describe('TaskFlow app flow', () => {
       if (path.endsWith('/api/v1/projects') && init?.method === 'POST') return reply(project, 201);
       if (path.endsWith('/api/v1/projects/7/tasks') && init?.method === 'POST') return reply({ id: 21, project_id: 7, title: 'Task creato dalla UI', description: '', status: 'todo', priority: 'medium' }, 201);
       if (path.endsWith('/api/v1/tasks/21') && init?.method === 'PATCH') return reply({ id: 21, project_id: 7, title: 'Task creato dalla UI', description: '', status: 'doing', priority: 'medium' });
-      if (path.endsWith('/api/v1/projects/7/invites') && init?.method === 'POST') return reply({ link: 'http://localhost:5173/invite/demo-token', email: null }, 201);
+      if (path.endsWith('/api/v1/projects/7/invites') && init?.method === 'POST') return reply({ link: 'http://localhost:5173/invite/demo-token', email: init?.body ? JSON.parse(String(init.body)).email : null }, 201);
       if (path.endsWith('/dashboard')) return reply({ createdProjects: [project], joinedProjects: [], assignedTasks: [{ id: 9, project_id: 7, project_name: project.name, title: 'Revisionare il flusso demo', description: '', status: 'todo', priority: 'high', due_date: '2026-10-11' }] });
       if (path.includes('/api/v1/projects?')) return reply({ projects: [project], catalog: [catalogProject] });
       if (path.endsWith('/api/v1/projects')) return reply({ projects: [project], catalog: [] });
@@ -109,6 +109,11 @@ describe('TaskFlow app flow', () => {
     writeClipboard.mockRejectedValueOnce(new Error('Clipboard non disponibile'));
     await user.click(screen.getByRole('button', { name: 'Copia link' }));
     expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Seleziona il link e copialo');
+    await user.type(screen.getByRole('textbox', { name: 'Email invitato' }), 'luca@example.test');
+    await user.click(screen.getByRole('button', { name: 'Invita via email' }));
+    expect(await screen.findByRole('textbox', { name: 'Email invitato' })).toHaveValue('');
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Invito per luca@example.test creato e copiato negli appunti.');
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/projects/7/invites', expect.objectContaining({ method: 'POST', body: JSON.stringify({ email: 'luca@example.test' }) }));
     await user.click(screen.getByRole('button', { name: 'Chiudi' }));
     await user.click(screen.getByRole('button', { name: /Chat/ }));
     const chatInput = screen.getByPlaceholderText(/Scrivi un messaggio/);
@@ -137,7 +142,7 @@ describe('TaskFlow app flow', () => {
     await user.click(screen.getByRole('button', { name: 'Filtra' }));
     expect(await screen.findByText('Progetto filtrato')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/v1/projects?category=Design&technology=React&createdFrom=2026-01-01&createdTo=2026-12-31'), expect.any(Object));
-  });
+  }, 15_000);
 
   it('ignores a late project response after navigating back to the project list', async () => {
     const user = userEvent.setup();
