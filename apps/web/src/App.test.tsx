@@ -81,12 +81,19 @@ describe('TaskFlow app flow', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Da fare' })).toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'In corso' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Completato' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Elimina progetto' }).querySelector('svg')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Nuovo task/ }));
     await user.type(screen.getByLabelText('Titolo'), 'Task creato dalla UI');
     await user.click(screen.getByRole('button', { name: 'Salva task' }));
     expect(await screen.findByRole('button', { name: 'Task creato dalla UI' })).toBeInTheDocument();
     await user.click(document.querySelector('.move-button') as HTMLButtonElement);
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/tasks/21', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('doing') }));
+    await waitFor(() => {
+      const columns = document.querySelectorAll('.board-column');
+      expect(columns[0]).not.toHaveTextContent('Task creato dalla UI');
+      expect(columns[1]).toHaveTextContent('Task creato dalla UI');
+      expect(columns[1]?.querySelectorAll('.task-card')).toHaveLength(1);
+    });
     await user.click(screen.getByRole('button', { name: /Chat/ }));
     await user.type(screen.getByPlaceholderText('Scrivi un messaggio…'), 'File demo');
     const files = [new File(['primo'], 'primo.txt', { type: 'text/plain' }), new File(['secondo'], 'secondo.txt', { type: 'text/plain' })];
@@ -105,6 +112,38 @@ describe('TaskFlow app flow', () => {
     await user.click(screen.getByRole('button', { name: 'Filtra' }));
     expect(await screen.findByText('Progetto filtrato')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/v1/projects?category=Design&technology=React&createdFrom=2026-01-01&createdTo=2026-12-31'), expect.any(Object));
+  });
+
+  it('ignores a late project response after navigating back to the project list', async () => {
+    const user = userEvent.setup();
+    const owner = { id: 1, display_name: 'Ada Lovelace', email: 'ada@example.test', role: 'user' };
+    const project = { id: 7, owner_id: 1, name: 'Progetto lento', description: '', category: 'Altro', technologies: '', visibility: 'private', archived_at: null, hidden_at: null, cover_path: null, role: 'owner' };
+    let resolveProject!: (response: Response) => void;
+    let projectRequested = false;
+    const delayedProject = new Promise<Response>((resolve) => { resolveProject = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/auth/refresh')) return reply({ error: { message: 'Sessione assente' } }, 401);
+      if (path.endsWith('/auth/login')) return reply({ user: owner, accessToken: 'test.jwt.token' });
+      if (path.endsWith('/dashboard')) return reply({ createdProjects: [project], joinedProjects: [], assignedTasks: [] });
+      if (path.endsWith('/api/v1/projects')) return reply({ projects: [project], catalog: [] });
+      if (path.endsWith('/api/v1/projects/7')) { projectRequested = true; return delayedProject; }
+      if (path.endsWith('/tasks') || path.endsWith('/members')) return reply([]);
+      return reply({ error: { message: 'Not found' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+
+    await user.type(await screen.findByLabelText('Email'), owner.email);
+    await user.type(screen.getByLabelText('Password'), 'correct horse battery');
+    await user.click(screen.getByRole('button', { name: 'Accedi' }));
+    await user.click(await screen.findByRole('button', { name: /Progetto lento/ }));
+    await waitFor(() => expect(projectRequested).toBe(true));
+    await user.click(screen.getByRole('button', { name: 'Progetti' }));
+    resolveProject(reply(project));
+
+    expect(await screen.findByText('Ciao Ada Lovelace, ecco cosa succede nei tuoi progetti.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Da fare' })).not.toBeInTheDocument());
   });
 
   it('loads admin queues and removes a reviewed report from the pending list', async () => {

@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Board } from './Board';
+import { Board, upsertTask } from './Board';
 
 afterEach(cleanup);
 
@@ -12,6 +12,16 @@ describe('TaskFlow board', () => {
     expect(screen.getByRole('heading', { name: 'In corso' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Completato' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Preparare demo' })).toBeInTheDocument();
+  });
+
+  it('renders one current card per task when a socket echo and API response overlap', () => {
+    const task = { id: 2, title: 'Task sincronizzato', description: '', status: 'done' as const, priority: 'medium' as const };
+    render(<Board tasks={[{ ...task, status: 'todo' }, task]} onMove={vi.fn()} onOpen={vi.fn()} />);
+    expect(screen.getAllByRole('button', { name: task.title })).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Da fare' }).closest('.board-column')).toHaveTextContent('0');
+    expect(screen.getByRole('heading', { name: 'Completato' }).closest('.board-column')).toHaveTextContent('1');
+    expect(screen.getByRole('heading', { name: 'Completato' }).closest('.board-column')).not.toHaveTextContent('Nessun task');
+    expect(upsertTask([{ ...task, status: 'todo' }, task], task)).toEqual([task]);
   });
 
   it('moves a task to the next state and opens its editor', async () => {

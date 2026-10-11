@@ -5,6 +5,10 @@ export type BoardTask = {
   due_date?: string | null; assignee_name?: string | null;
 };
 
+export function upsertTask(tasks: BoardTask[], task: BoardTask): BoardTask[] {
+  return [task, ...tasks.filter((existing) => existing.id !== task.id)];
+}
+
 const columns: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'todo', label: 'Da fare', color: 'gray' },
   { id: 'doing', label: 'In corso', color: 'blue' },
@@ -15,9 +19,10 @@ const next: Record<TaskStatus, TaskStatus> = { todo: 'doing', doing: 'done', don
 export function Board({ tasks, onMove, onOpen, readOnly = false }: {
   tasks: BoardTask[]; onMove: (id: number, status: TaskStatus) => void; onOpen: (task: BoardTask) => void; readOnly?: boolean;
 }) {
+  const uniqueTasks = [...new Map(tasks.map((task) => [task.id, task])).values()];
   return <div className="board" aria-label="Bacheca TaskFlow">
     {columns.map((column) => {
-      const cards = tasks.filter((task) => task.status === column.id);
+      const cards = uniqueTasks.filter((task) => task.status === column.id);
       return <section className="board-column" key={column.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
         event.preventDefault(); const id = Number(event.dataTransfer.getData('text/taskflow-id')); if (id) onMove(id, column.id);
       }}>

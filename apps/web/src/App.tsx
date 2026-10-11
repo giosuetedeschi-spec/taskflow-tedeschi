@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import type { TaskPriority, TaskStatus } from '@taskflow/contracts';
-import { Board, type BoardTask } from './Board';
+import { Board, type BoardTask, upsertTask } from './Board';
 
 type User = { id: number; display_name: string; email: string; role: 'user' | 'admin' };
 type Project = { id: number; owner_id: number; name: string; description: string; category: string; technologies: string; visibility: 'public' | 'private'; archived_at: string | null; hidden_at: string | null; cover_path: string | null; owner_name?: string; is_owner?: number; role?: string };
@@ -57,6 +57,7 @@ export default function App() {
   const [reports, setReports] = useState<Report[]>([]);
   const [hiddenProjects, setHiddenProjects] = useState<HiddenProject[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
+  const projectLoadId = useRef(0);
   const [transferMember, setTransferMember] = useState('');
   const [search, setSearch] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
@@ -111,30 +112,51 @@ export default function App() {
   }, [call, user]);
   useEffect(() => { void loadProjects(); }, [loadProjects]);
 
-  const openProject = useCallback(async (project: Project) => {
-    setError(''); setActive(project); setModal(null);
-    window.history.pushState({}, '', `/projects/${project.id}`);
+  const openProject = useCallback(async (project: Project, pushHistory = true) => {
+    const loadId = ++projectLoadId.current;
+    setError(''); setActive(project); setTasks([]); setMembers([]); setMessages([]); setModal(null);
+    if (pushHistory) window.history.pushState({}, '', `/projects/${project.id}`);
     try {
       const [details, taskRows, memberRows] = await Promise.all([
         call<Project>(`/projects/${project.id}`), call<BoardTask[]>(`/projects/${project.id}/tasks`), call<Member[]>(`/projects/${project.id}/members`),
       ]);
+      if (loadId !== projectLoadId.current) return;
       setActive(details); setTasks(taskRows); setMembers(memberRows);
       if (details.role === 'member' || details.role === 'owner') {
-        const chat = await call<{ items: ChatMessage[] }>(`/projects/${project.id}/messages`); setMessages(chat.items);
+        const chat = await call<{ items: ChatMessage[] }>(`/projects/${project.id}/messages`);
+        if (loadId === projectLoadId.current) setMessages(chat.items);
       }
-    } catch (e) { setError(e instanceof Error ? e.message : 'Progetto non disponibile.'); }
+    } catch (e) { if (loadId === projectLoadId.current) setError(e instanceof Error ? e.message : 'Progetto non disponibile.'); }
   }, [call]);
+
+  const navigateHome = useCallback((pushHistory = true) => {
+    projectLoadId.current++;
+    setActive(null); setTasks([]); setMembers([]); setMessages([]); setModal(null);
+    if (pushHistory) window.history.pushState({}, '', '/');
+  }, []);
 
   useEffect(() => {
     const match = window.location.pathname.match(/^\/projects\/(\d+)/);
-    if (match && projects.length && !active) { const project = projects.find((p) => p.id === Number(match[1])); if (project) void openProject(project); }
+    if (match && projects.length && !active) { const project = projects.find((p) => p.id === Number(match[1])); if (project) void openProject(project, false); }
   }, [active, openProject, projects]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const match = window.location.pathname.match(/^\/projects\/(\d+)/);
+      if (!match) { navigateHome(false); return; }
+      const project = projects.find((item) => item.id === Number(match[1]));
+      if (project) void openProject(project, false);
+      else navigateHome(false);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [navigateHome, openProject, projects]);
 
   useEffect(() => {
     if (!token || !active) return;
     const socket: Socket = io({ auth: { token } });
     socket.on('connect', () => socket.emit('project:join', active.id));
-    const syncTask = (task: BoardTask) => setTasks((old) => old.some((row) => row.id === task.id) ? old.map((row) => row.id === task.id ? task : row) : [task, ...old]);
+    const syncTask = (task: BoardTask) => setTasks((old) => upsertTask(old, task));
     socket.on('task.created', (e) => syncTask(e.data));
     socket.on('task.updated', (e) => syncTask(e.data));
     socket.on('task.moved', (e) => syncTask(e.data));
@@ -155,7 +177,7 @@ export default function App() {
   }
   async function logout() {
     try { await call('/auth/logout', { method: 'POST' }); } catch {}
-    setUser(null); setToken(''); setActive(null); setProjects([]); setCatalog([]); window.history.replaceState({}, '', '/');
+    setUser(null); setToken(''); navigateHome(false); setProjects([]); setCatalog([]); window.history.replaceState({}, '', '/');
   }
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(''); setNotice('');
@@ -200,13 +222,13 @@ export default function App() {
     const form = new FormData(event.currentTarget);
     const body = { title: form.get('title'), description: form.get('description'), priority: form.get('priority') as TaskPriority, dueDate: form.get('dueDate') || null, assigneeId: form.get('assigneeId') ? Number(form.get('assigneeId')) : null, status: form.get('status') as TaskStatus };
     try {
-      if (editingTask.id) { const saved = await call<BoardTask>(`/tasks/${editingTask.id}`, { method: 'PATCH', body: JSON.stringify(body) }); setTasks((old) => old.map((t) => t.id === saved.id ? saved : t)); }
-      else { const saved = await call<BoardTask>(`/projects/${active.id}/tasks`, { method: 'POST', body: JSON.stringify(body) }); setTasks((old) => [saved, ...old]); }
+      if (editingTask.id) { const saved = await call<BoardTask>(`/tasks/${editingTask.id}`, { method: 'PATCH', body: JSON.stringify(body) }); setTasks((old) => upsertTask(old, saved)); }
+      else { const saved = await call<BoardTask>(`/projects/${active.id}/tasks`, { method: 'POST', body: JSON.stringify(body) }); setTasks((old) => upsertTask(old, saved)); }
       setModal(null); setEditingTask(null);
     } catch (e) { setError(e instanceof Error ? e.message : 'Salvataggio task non riuscito.'); }
   }
   async function moveTask(id: number, status: TaskStatus) {
-    try { const saved = await call<BoardTask>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); setTasks((old) => old.map((task) => task.id === id ? saved : task)); }
+    try { const saved = await call<BoardTask>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }); setTasks((old) => upsertTask(old, saved)); }
     catch (e) { setError(e instanceof Error ? e.message : 'Spostamento non riuscito.'); }
   }
   async function loadMessages() {
@@ -278,11 +300,11 @@ export default function App() {
   </div><footer>TaskFlow • Workspace collaborativo locale</footer></main>;
 
   return <div className="app-shell">
-    <header className="topbar"><button className="menu-button" aria-label="Apri elenco progetti" onClick={() => { setActive(null); window.history.pushState({}, '', '/'); }}>☰</button><div className="brand-mark small">T</div><div className="breadcrumbs"><button onClick={() => { setActive(null); window.history.pushState({}, '', '/'); }}>TaskFlow</button><span>/</span><button onClick={() => { setActive(null); window.history.pushState({}, '', '/'); }}>Progetti</button>{active && <><span>/</span><strong>{active.name}{active.visibility === 'private' ? ' 🔒' : ''}</strong></>}</div><div className="topbar-spacer" /><label className="global-search"><span>⌕</span><input aria-label="Cerca task" placeholder="Cerca nella board" value={search} onChange={(e) => setSearch(e.target.value)} /><kbd>/</kbd></label><button className="avatar" title={user.email}>{user.display_name.slice(0, 1).toUpperCase()}</button><button className="text-button" onClick={() => void logout()}>Esci</button></header>
+    <header className="topbar"><button className="menu-button" aria-label="Apri elenco progetti" onClick={() => navigateHome()}>☰</button><div className="brand-mark small">T</div><div className="breadcrumbs"><button onClick={() => navigateHome()}>TaskFlow</button><span>/</span><button onClick={() => navigateHome()}>Progetti</button>{active && <><span>/</span><strong>{active.name}{active.visibility === 'private' ? ' 🔒' : ''}</strong></>}</div><div className="topbar-spacer" /><label className="global-search"><span>⌕</span><input aria-label="Cerca task" placeholder="Cerca nella board" value={search} onChange={(e) => setSearch(e.target.value)} /><kbd>/</kbd></label><button className="avatar" title={user.email}>{user.display_name.slice(0, 1).toUpperCase()}</button><button className="text-button" onClick={() => void logout()}>Esci</button></header>
     {active ? <>
       <div className="project-titlebar"><div><div className="eyebrow">Progetto {active.visibility === 'private' ? 'privato' : 'pubblico'}{active.archived_at && ' · archiviato'}</div><h1>{active.name}</h1><p>{active.description || 'Aggiungi una descrizione al progetto.'}</p></div><div className="title-actions"><button className="outline-button" onClick={() => setModal('chat')}>☷ Chat <span className="count">{messages.length}</span></button><button className="outline-button" onClick={() => setModal('members')}>♙ Membri <span className="count">{members.length}</span></button><button className="primary-button compact" onClick={() => { setEditingTask({ id: 0, title: '', description: '', status: 'todo', priority: 'medium' }); setModal('task'); }} disabled={!!active.archived_at}>＋ Nuovo task</button></div></div>
       <nav className="view-tabs"><button className="active-tab">▦ Board</button><button onClick={() => setModal('chat')}>☷ Conversazione</button><div className="tab-spacer" /><select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Filtra priorità"><option value="all">Tutte le priorità</option><option value="high">Alta priorità</option><option value="medium">Media priorità</option><option value="low">Bassa priorità</option></select>{active.owner_id !== user.id && <button onClick={() => void reportProject()}>Segnala progetto</button>}{active.owner_id === user.id && <button onClick={() => { setProjectForm({ name: active.name, description: active.description, category: active.category, technologies: active.technologies, visibility: active.visibility }); setModal('project'); }}>Modifica progetto</button>}</nav>
-      <main className="board-page"><div className="board-toolbar"><div className="filter-input">⌕ <input aria-label="Filtra task" placeholder="Filtra per parola chiave" value={search} onChange={(e) => setSearch(e.target.value)} /></div><div className="toolbar-actions">{active.owner_id === user.id && <><button className="icon-button" title="Copia link invito" onClick={() => void createInvite()}>♧</button>{active.archived_at ? <button className="outline-button" onClick={() => void restoreProject()}>Riattiva</button> : <button className="outline-button" onClick={() => void archiveProject()}>Archivia</button>}<button className="icon-button danger-text" title="Elimina progetto" onClick={() => void deleteProject()}>⋯</button></>}</div></div>
+      <main className="board-page"><div className="board-toolbar"><div className="filter-input">⌕ <input aria-label="Filtra task" placeholder="Filtra per parola chiave" value={search} onChange={(e) => setSearch(e.target.value)} /></div><div className="toolbar-actions">{active.owner_id === user.id && <><button className="icon-button" title="Copia link invito" onClick={() => void createInvite()}>♧</button>{active.archived_at ? <button className="outline-button" onClick={() => void restoreProject()}>Riattiva</button> : <button className="outline-button" onClick={() => void archiveProject()}>Archivia</button>}<button className="icon-button danger-text" title="Elimina progetto" aria-label="Elimina progetto" onClick={() => void deleteProject()}><svg aria-hidden="true" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4h11M6 4V2.5h4V4m2.5 0-.6 9H4.1l-.6-9M6.5 6.5v4M9.5 6.5v4" /></svg></button></>}</div></div>
         {notice && <div className="notice-banner" role="status">{notice}<button onClick={() => setNotice('')}>×</button></div>}{error && <div className="notice-banner error" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}
         <Board tasks={filteredTasks} onMove={(id, status) => void moveTask(id, status)} onOpen={(task) => { setEditingTask(task); setModal('task'); }} readOnly={!!active.archived_at} />
       </main>
