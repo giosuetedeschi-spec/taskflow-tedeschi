@@ -132,6 +132,13 @@ describe('TaskFlow app flow', () => {
     expect(sentMessage.get('text')).toBe('File demo\nseconda riga');
     expect(window.location.pathname).toBe('/projects/7');
     expect(chatInput).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Chiudi chat' })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/auth/logout', expect.anything());
+    await user.type(chatInput, 'Invio con pulsante');
+    await user.click(screen.getByRole('button', { name: 'Invia ↗' }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/projects/7/messages') && init?.method === 'POST')).toHaveLength(2));
+    expect(window.location.pathname).toBe('/projects/7');
+    expect(chatInput).toHaveValue('');
     await user.click(screen.getByRole('button', { name: 'Chiudi chat' }));
     await user.click(screen.getByRole('button', { name: 'Progetti' }));
     expect(await screen.findByText('Revisionare il flusso demo')).toBeInTheDocument();
