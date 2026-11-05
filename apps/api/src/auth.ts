@@ -1,7 +1,11 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 
-const secret = process.env.JWT_SECRET ?? randomBytes(32).toString('hex');
+const configuredSecret = process.env.JWT_SECRET;
+if (process.env.NODE_ENV === 'production' && (!configuredSecret || configuredSecret.length < 32)) {
+  throw new Error('In production JWT_SECRET must be configured with at least 32 characters.');
+}
+const secret = configuredSecret ?? randomBytes(32).toString('hex');
 const b64 = (value: string) => Buffer.from(value).toString('base64url');
 export const hashToken = (value: string) => createHash('sha256').update(value).digest('hex');
 

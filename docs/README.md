@@ -8,6 +8,8 @@ Questa cartella traduce la traccia dell'esame e le indicazioni integrative condi
 - [Decisioni e domande](decisioni-e-domande.md): risposte proposte per i gruppi di scelte ancora aperti, adottando separazione, sicurezza e comunicazione chiara.
 - [Piano di sviluppo](piano-sviluppo.md): sequenza proposta delle feature e risultati attesi per fase.
 - [Casi di test iniziali](../tests/README.md): copertura prevista per backend e frontend, organizzata per area.
+- [Deployment web su CT138](deployment-ct138.md): variabili di produzione, storage persistente e passaggi da gestire con IaC/Ansible.
+- [Notifiche live: lacuna rispetto al PDR](notifiche-live-gap.md): problema verificato nel codice e soluzione proposta, non ancora implementata.
 
 ## Fonte e stato
 

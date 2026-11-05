@@ -11,6 +11,10 @@ import type { AppDatabase } from './db';
 
 const api = '/api/v1';
 const defaultUploadsRoot = process.env.UPLOADS_DIR ?? join(import.meta.dir, '../../../uploads');
+const publicOrigin = process.env.PUBLIC_ORIGIN ?? 'http://localhost:5173';
+const allowedOrigins = new Set(['http://localhost:5173', 'http://127.0.0.1:5173', publicOrigin]);
+if (new URL(publicOrigin).origin !== publicOrigin) throw new Error('PUBLIC_ORIGIN must contain only the application origin.');
+const emailUnavailable = (res: Response) => fail(res, 503, 'EMAIL_UNAVAILABLE', 'La funzione richiede un servizio email configurato.');
 
 type Project = { id: number; owner_id: number; name: string; description: string; visibility: string; archived_at: string | null; hidden_at: string | null; cover_path: string | null };
 type EventName = 'task.created' | 'task.updated' | 'task.moved' | 'task.assigned' | 'member.joined' | 'member.left' | 'project.owner.transferred' | 'chat.message.created' | 'report.created' | 'project.updated';
@@ -91,7 +95,7 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       const origin = req.get('origin');
       if (origin) {
-        try { if (!['localhost', '127.0.0.1'].includes(new URL(origin).hostname)) return fail(res, 403, 'BAD_ORIGIN', 'Origine non consentita.'); }
+        try { if (!allowedOrigins.has(new URL(origin).origin)) return fail(res, 403, 'BAD_ORIGIN', 'Origine non consentita.'); }
         catch { return fail(res, 403, 'BAD_ORIGIN', 'Origine non consentita.'); }
       }
     }
@@ -164,13 +168,14 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
   });
 
   app.post(`${api}/auth/forgot`, (req, res) => {
+    if (process.env.NODE_ENV === 'production') return emailUnavailable(res);
     const email = typeof req.body?.email === 'string' ? req.body.email.toLowerCase() : '';
     const user = db.query<{ id: number; email: string }, any[]>('SELECT id, email FROM users WHERE email = ? COLLATE NOCASE').get(email);
     if (user) {
       const token = newOpaqueToken();
       db.query('DELETE FROM sessions WHERE user_id = ?').run(user.id);
       db.query('INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES (?, ?, ?)').run(user.id, hashToken(token), new Date(Date.now() + 3600_000).toISOString());
-      console.info(`[email mock] password reset to ${user.email}: http://localhost:5173/reset/${token}`);
+      console.info(`[email mock] password reset to ${user.email}: ${publicOrigin}/reset/${token}`);
     }
     res.json({ message: 'Se l’indirizzo è registrato, riceverai un link per il recupero.' });
   });
@@ -304,10 +309,11 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     if (!mutableProject(access.project, res)) return;
     const email = typeof req.body?.email === 'string' && req.body.email.trim() ? req.body.email.trim().toLowerCase() : null;
     if (email && !z.email().safeParse(email).success) return fail(res, 422, 'INVALID_EMAIL', 'Inserisci un indirizzo email valido.');
+    if (email && process.env.NODE_ENV === 'production') return emailUnavailable(res);
     const token = newOpaqueToken();
     db.query('INSERT INTO invitations (project_id, created_by, email, token_hash) VALUES (?, ?, ?, ?)').run(id, userOf(req).id, email, hashToken(token));
-    const link = `http://localhost:5173/invite/${token}`;
-    console.info(`[email mock] to ${email ?? 'link share'} | TaskFlow project invite | ${link}`);
+    const link = `${publicOrigin}/invite/${token}`;
+    if (process.env.NODE_ENV !== 'production') console.info(`[email mock] to ${email ?? 'link share'} | TaskFlow project invite | ${link}`);
     res.status(201).json({ link, email });
   });
   app.post(`${api}/projects/:id/invites/revoke`, requireAuth, (req: AuthRequest, res) => {
@@ -336,8 +342,7 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     const token = newOpaqueToken();
     db.query('DELETE FROM owner_transfers WHERE project_id = ?').run(id);
     db.query('INSERT INTO owner_transfers (project_id, new_owner_id, token_hash) VALUES (?, ?, ?)').run(id, memberId, hashToken(token));
-    const link = `http://localhost:5173/transfer/${token}`;
-    console.info(`[email mock] project ownership transfer to ${memberId}: ${link}`);
+    const link = `${publicOrigin}/transfer/${token}`;
     res.status(201).json({ link });
   });
   app.post(`${api}/transfers/:token/accept`, requireAuth, (req: AuthRequest, res) => {
@@ -440,7 +445,10 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
         return newMessageId;
       })());
     } catch (error) { cleanupUploads(files); throw error; }
-    const message = { id: messageId, project_id: id, user_id: userOf(req).id, author_name: userOf(req).display_name, text: data.text, created_at: new Date().toISOString(), attachments: db.query('SELECT id, original_name, mime_type, size FROM attachments WHERE message_id = ?').all(messageId) };
+    const message = {
+      ...db.query('SELECT m.*, u.display_name AS author_name FROM messages m JOIN users u ON u.id = m.user_id WHERE m.id = ?').get(messageId)!,
+      attachments: db.query('SELECT id, original_name, mime_type, size FROM attachments WHERE message_id = ?').all(messageId),
+    };
     event(io, id, 'chat.message.created', message); res.status(201).json(message);
   });
   app.get(`${api}/attachments/:id/download`, requireAuth, (req: AuthRequest, res) => {

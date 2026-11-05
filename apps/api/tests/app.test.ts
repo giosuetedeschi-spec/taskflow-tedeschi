@@ -91,16 +91,18 @@ describe('account and project board API', () => {
 
   it('shares an invite link, accepts it and persists member chat', async () => {
     const owner = await account('owner@example.test');
-    const guest = await account('guest@example.test');
+    const guest = await account('guest@example.test', 'Guest Demo');
     const intruder = await account('intruder@example.test');
     const project = await request(app).post('/api/v1/projects').set(auth(owner.token)).send({ name: 'Team', visibility: 'private' }).expect(201);
     const invitation = await request(app).post(`/api/v1/projects/${project.body.id}/invites`).set(auth(owner.token)).send({ email: guest.user.email }).expect(201);
     const token = invitation.body.link.split('/').pop();
     await request(app).post(`/api/v1/invites/${token}/accept`).set(auth(intruder.token)).expect(403);
     await request(app).post(`/api/v1/invites/${token}/accept`).set(auth(guest.token)).expect(200);
-    await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(guest.token)).field('text', 'Ciao team').expect(201);
+    const sent = await request(app).post(`/api/v1/projects/${project.body.id}/messages`).set(auth(guest.token)).field('text', 'Ciao team').expect(201);
+    expect(sent.body.author_name).toBe('Guest Demo');
     const history = await request(app).get(`/api/v1/projects/${project.body.id}/messages`).set(auth(owner.token)).expect(200);
     expect(history.body.items[0].text).toBe('Ciao team');
+    expect(history.body.items[0].author_name).toBe('Guest Demo');
   });
 
   it('validates local covers and attachments and restricts file downloads to members', async () => {

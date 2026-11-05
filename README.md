@@ -26,7 +26,7 @@ Le versioni stabili sono uno snapshot da ricontrollare all'avvio dell'implementa
 - Chat di progetto con cronologia, allegati e aggiornamenti in tempo reale.
 - Segnalazioni, moderazione e strumenti amministrativi.
 
-L'applicazione è progettata per l'uso locale su Windows; non è previsto hosting remoto.
+L'applicazione funziona in sviluppo locale e può essere avviata in produzione dietro reverse proxy/tunnel HTTPS. La configurazione di CT138 è descritta in [Deployment web su CT138](docs/deployment-ct138.md); il progetto non crea o modifica infrastruttura.
 
 ## Documentazione
 
@@ -50,6 +50,10 @@ bun run dev
 
 Aprire <http://localhost:5173>. Il mock email mostra nel terminale API i link di invito e recupero password.
 Il seed demo è solo locale e usa account `@example.test`; credenziali e flusso Postman sono in [postman/README.md](postman/README.md).
+
+## Produzione
+
+Il build produce frontend e API avviabili sullo stesso origin (`bun run build`, `bun run start`). Impostare le variabili richieste in `.env.example`; mantenere database SQLite e allegati su storage persistente. Inviti via email e recupero password restano disabilitati in produzione finché non viene integrato un provider email.
 
 ## Consegna
 

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "bun run --filter '*' --parallel dev",
     "build": "bun run --filter '*' build",
+    "start": "bun run --filter @taskflow/api start",
     "test": "bun run --filter '*' test",
     "typecheck": "bun run --filter '*' typecheck",
     "seed:admin": "bun run --filter @taskflow/api seed:admin",
