@@ -34,6 +34,22 @@ function event(io: SocketServer | null, projectId: number, name: EventName, data
   io?.to(`project:${projectId}`).emit(name, { eventId: randomUUID(), projectId, occurredAt: Date.now(), data });
 }
 
+function userEvent(io: SocketServer | null, userId: number, projectId: number, name: EventName, data: unknown) {
+  io?.to(`user:${userId}`).emit(name, { eventId: randomUUID(), projectId, occurredAt: Date.now(), data });
+}
+
+function memberEvent(db: AppDatabase, io: SocketServer | null, projectId: number, name: EventName, data: unknown, excludedUserId?: number) {
+  const members = db.query<{ user_id: number }, any[]>('SELECT user_id FROM memberships WHERE project_id = ? AND left_at IS NULL').all(projectId);
+  const rooms = [`project:${projectId}`, ...members.filter((member) => member.user_id !== excludedUserId).map((member) => `user:${member.user_id}`)];
+  io?.to(rooms).emit(name, { eventId: randomUUID(), projectId, occurredAt: Date.now(), data });
+}
+
+function taskEvent(db: AppDatabase, io: SocketServer | null, projectId: number, name: EventName, data: unknown, userIds: Array<number | null | undefined> = []) {
+  const recipients = new Set(userIds.filter((id): id is number => !!id && !!memberRow(db, projectId, id)));
+  const rooms = [`project:${projectId}`, ...[...recipients].map((id) => `user:${id}`)];
+  io?.to(rooms).emit(name, { eventId: randomUUID(), projectId, occurredAt: Date.now(), data });
+}
+
 function mustMember(db: AppDatabase, req: AuthRequest, res: Response, projectId: number) {
   const member = memberRow(db, projectId, userOf(req).id);
   if (!member) { fail(res, 404, 'NOT_FOUND', 'Progetto non trovato.'); return null; }
@@ -300,8 +316,8 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     if (memberRow(db, id, userOf(req).id)) return res.json({ joined: true });
     if (db.query('SELECT 1 FROM memberships WHERE project_id = ? AND user_id = ?').get(id, userOf(req).id)) return fail(res, 403, 'REJOIN_INVITE_REQUIRED', 'Per rientrare chiedi un nuovo invito al proprietario.');
     db.query('INSERT INTO memberships (project_id, user_id, history_from_id) VALUES (?, ?, (SELECT COALESCE(MAX(id), 0) + 1 FROM messages WHERE project_id = ?))').run(id, userOf(req).id, id);
-    const member = db.query('SELECT id, display_name FROM users WHERE id = ?').get(userOf(req).id);
-    event(io, id, 'member.joined', { member }); res.status(201).json({ joined: true });
+    const member = db.query<{ id: number; display_name: string }, any[]>('SELECT id, display_name FROM users WHERE id = ?').get(userOf(req).id)!;
+    memberEvent(db, io, id, 'member.joined', { member }, member.id); res.status(201).json({ joined: true });
   });
 
   app.post(`${api}/projects/:id/invites`, requireAuth, (req: AuthRequest, res) => {
@@ -329,8 +345,8 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     const project = projectRow(db, invite.project_id); if (!project || project.archived_at || project.hidden_at) return fail(res, 423, 'PROJECT_UNAVAILABLE', 'Il progetto non accetta nuovi membri.');
     if (!memberRow(db, project.id, userOf(req).id)) {
       db.query('INSERT INTO memberships (project_id, user_id, history_from_id) VALUES (?, ?, (SELECT COALESCE(MAX(id), 0) + 1 FROM messages WHERE project_id = ?))').run(project.id, userOf(req).id, project.id);
-      const member = db.query('SELECT id, display_name FROM users WHERE id = ?').get(userOf(req).id);
-      event(io, project.id, 'member.joined', { member });
+      const member = db.query<{ id: number; display_name: string }, any[]>('SELECT id, display_name FROM users WHERE id = ?').get(userOf(req).id)!;
+      memberEvent(db, io, project.id, 'member.joined', { member }, member.id);
     }
     res.json({ projectId: project.id });
   });
@@ -371,7 +387,8 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     if (!member) return fail(res, 404, 'NOT_FOUND', 'Membro non trovato.');
     db.query('UPDATE memberships SET left_at = CURRENT_TIMESTAMP WHERE project_id = ? AND user_id = ? AND left_at IS NULL').run(id, memberId);
     io?.in(`user:${memberId}`).socketsLeave(`project:${id}`);
-    event(io, id, 'member.left', { member, reason: 'removed' }); res.status(204).end();
+    memberEvent(db, io, id, 'member.left', { member, reason: 'removed' });
+    userEvent(io, memberId, id, 'member.left', { member, reason: 'removed' }); res.status(204).end();
   });
   app.post(`${api}/projects/:id/leave`, requireAuth, (req: AuthRequest, res) => {
     const id = Number(req.params.id); const access = mustMember(db, req, res, id); if (!access) return;
@@ -379,7 +396,8 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     const member = db.query<{ id: number; display_name: string }, any[]>('SELECT id, display_name FROM users WHERE id = ?').get(userOf(req).id);
     db.query('UPDATE memberships SET left_at = CURRENT_TIMESTAMP WHERE project_id = ? AND user_id = ? AND left_at IS NULL').run(id, userOf(req).id);
     io?.in(`user:${userOf(req).id}`).socketsLeave(`project:${id}`);
-    event(io, id, 'member.left', { member, reason: 'left' }); res.status(204).end();
+    memberEvent(db, io, id, 'member.left', { member, reason: 'left' });
+    userEvent(io, userOf(req).id, id, 'member.left', { member, reason: 'left' }); res.status(204).end();
   });
 
   app.get(`${api}/projects/:id/tasks`, requireAuth, (req: AuthRequest, res) => {
@@ -391,25 +409,27 @@ export function createApp(db: AppDatabase, io: SocketServer | null = null, uploa
     const data = parse(taskInputSchema, req.body, res); if (!data) return;
     if (data.assigneeId && !memberRow(db, id, data.assigneeId)) return fail(res, 422, 'ASSIGNEE_NOT_MEMBER', 'L’assegnatario deve essere membro del progetto.');
     const result = db.query('INSERT INTO tasks (project_id, creator_id, assignee_id, title, description, priority, due_date) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, userOf(req).id, data.assigneeId ?? null, data.title, data.description, data.priority, data.dueDate ?? null);
-    const task = db.query('SELECT * FROM tasks WHERE id = ?').get(Number(result.lastInsertRowid));
-    event(io, id, 'task.created', task); res.status(201).json(task);
+    const task = db.query('SELECT t.*, u.display_name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.id = ?').get(Number(result.lastInsertRowid));
+    taskEvent(db, io, id, 'task.created', task, [data.assigneeId]);
+    if (data.assigneeId) userEvent(io, data.assigneeId, id, 'task.assigned', task);
+    res.status(201).json(task);
   });
   app.patch(`${api}/tasks/:id`, requireAuth, (req: AuthRequest, res) => {
     const taskId = Number(req.params.id);
-    const task = db.query<{ id: number; project_id: number; creator_id: number; status: string }, any[]>('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    const task = db.query<{ id: number; project_id: number; creator_id: number; status: string; assignee_id: number | null }, any[]>('SELECT * FROM tasks WHERE id = ?').get(taskId);
     if (!task) return fail(res, 404, 'NOT_FOUND', 'Task non trovato.');
     const access = mustMember(db, req, res, task.project_id); if (!access || !mutableProject(access.project, res)) return;
     const input = parse(taskInputSchema.partial().extend({ status: taskStatus.optional() }), req.body, res); if (!input) return;
     if (!Object.keys(input).length) return fail(res, 422, 'EMPTY_UPDATE', 'Indica almeno un campo da modificare.');
     if ('assigneeId' in input && input.assigneeId && !memberRow(db, task.project_id, input.assigneeId)) return fail(res, 422, 'ASSIGNEE_NOT_MEMBER', 'L’assegnatario deve essere membro del progetto.');
     const previousStatus = task.status;
+    const assigneeChanged = 'assigneeId' in input && input.assigneeId !== task.assignee_id;
     const columns: Record<string, string> = { title: 'title', description: 'description', priority: 'priority', dueDate: 'due_date', assigneeId: 'assignee_id', status: 'status' };
     const entries = Object.entries(input); db.query(`UPDATE tasks SET ${entries.map(([k]) => `${columns[k]} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...entries.map(([, v]) => v ?? null), taskId);
     const updated = db.query('SELECT t.*, u.display_name AS assignee_name FROM tasks t LEFT JOIN users u ON u.id = t.assignee_id WHERE t.id = ?').get(taskId);
-    if (input.status && input.status !== previousStatus) event(io, task.project_id, 'task.moved', { ...updated as object, previousStatus });
-    else if (input.assigneeId) {
-      if (input.assigneeId) io?.to(`user:${input.assigneeId}`).emit('task.assigned', { eventId: randomUUID(), projectId: task.project_id, occurredAt: Date.now(), data: updated });
-    } else event(io, task.project_id, 'task.updated', updated);
+    if (input.status && input.status !== previousStatus) taskEvent(db, io, task.project_id, 'task.moved', { ...updated as object, previousStatus }, [task.assignee_id, input.assigneeId]);
+    else taskEvent(db, io, task.project_id, 'task.updated', updated, [task.assignee_id, input.assigneeId]);
+    if (assigneeChanged && input.assigneeId) userEvent(io, input.assigneeId, task.project_id, 'task.assigned', updated);
     res.json(updated);
   });
   app.delete(`${api}/tasks/:id`, requireAuth, (req: AuthRequest, res) => {

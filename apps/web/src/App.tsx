@@ -12,6 +12,8 @@ type HiddenProject = { id: number; name: string; owner_id: number };
 type BlockedUser = { id: number; display_name: string; email: string; blocked_at: string };
 type DashboardTask = BoardTask & { project_id: number; project_name: string; due_date: string | null };
 type Dashboard = { createdProjects: Project[]; joinedProjects: Project[]; assignedTasks: DashboardTask[] };
+type RealtimeEvent<T> = { eventId: string; projectId: number; data: T };
+type LiveNotification = { id: string; message: string };
 type CatalogFilters = { category: string; technology: string; createdFrom: string; createdTo: string };
 const emptyCatalogFilters: CatalogFilters = { category: '', technology: '', createdFrom: '', createdTo: '' };
 
@@ -57,7 +59,14 @@ export default function App() {
   const [reports, setReports] = useState<Report[]>([]);
   const [hiddenProjects, setHiddenProjects] = useState<HiddenProject[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<BlockedUser[]>([]);
+  const [liveNotifications, setLiveNotifications] = useState<LiveNotification[]>([]);
   const projectLoadId = useRef(0);
+  const activeRef = useRef(active);
+  const modalRef = useRef<'project' | 'task' | 'chat' | 'members' | 'admin' | null>(null);
+  const userRef = useRef(user);
+  const projectsRef = useRef(projects);
+  const socketRef = useRef<Socket | null>(null);
+  const joinedProjectRef = useRef<number | null>(null);
   const [transferMember, setTransferMember] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteLink, setInviteLink] = useState('');
@@ -71,12 +80,39 @@ export default function App() {
   const [inviteToken] = useState(() => window.location.pathname.match(/^\/invite\/([^/]+)/)?.[1] ?? '');
   const [transferToken] = useState(() => window.location.pathname.match(/^\/transfer\/([^/]+)/)?.[1] ?? '');
 
+  useEffect(() => { activeRef.current = active; }, [active]);
+  useEffect(() => { modalRef.current = modal; }, [modal]);
+  useEffect(() => { userRef.current = user; }, [user]);
+  useEffect(() => { projectsRef.current = projects; }, [projects]);
+
+  const notify = useCallback((id: string, message: string) => {
+    setLiveNotifications((current) => current.some((item) => item.id === id) ? current : [...current, { id, message }].slice(-4));
+  }, []);
+
   const call = useCallback(async <T,>(path: string, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
     if (token) headers.set('Authorization', `Bearer ${token}`);
     if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
     return readResponse<T>(await fetch(`${apiRoot}${path}`, { ...init, headers, credentials: 'include' }));
   }, [token]);
+
+  const refreshRealtimeData = useCallback((projectId?: number) => {
+    void call<Dashboard>('/dashboard').then(setDashboard).catch(() => {});
+    if (!projectId) return;
+    void Promise.all([
+      call<Project>(`/projects/${projectId}`),
+      call<BoardTask[]>(`/projects/${projectId}/tasks`),
+      call<Member[]>(`/projects/${projectId}/members`),
+    ]).then(([details, taskRows, memberRows]) => {
+      if (activeRef.current?.id !== projectId) return;
+      setActive(details); setTasks(taskRows); setMembers(memberRows);
+      if (modalRef.current === 'chat') {
+        void call<{ items: ChatMessage[] }>(`/projects/${projectId}/messages`).then((chat) => {
+          if (activeRef.current?.id === projectId && modalRef.current === 'chat') setMessages(chat.items);
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+  }, [call]);
 
   const acceptInvite = useCallback(async (invite: string, currentToken: string) => {
     try {
@@ -156,20 +192,73 @@ export default function App() {
   }, [navigateHome, openProject, projects]);
 
   useEffect(() => {
-    if (!token || !active) return;
+    if (!token) return;
     const socket: Socket = io({ auth: { token } });
-    socket.on('connect', () => socket.emit('project:join', active.id));
-    const syncTask = (task: BoardTask) => setTasks((old) => upsertTask(old, task));
-    socket.on('task.created', (e) => syncTask(e.data));
-    socket.on('task.updated', (e) => syncTask(e.data));
-    socket.on('task.moved', (e) => syncTask(e.data));
-    socket.on('task.assigned', (e) => syncTask(e.data));
-    socket.on('chat.message.created', (e) => setMessages((old) => old.some((m) => m.id === e.data.id) ? old : [...old, e.data]));
-    socket.on('member.joined', () => void call<Member[]>(`/projects/${active.id}/members`).then(setMembers));
-    socket.on('member.left', () => void call<Member[]>(`/projects/${active.id}/members`).then(setMembers));
-    socket.on('project.owner.transferred', (e) => { setActive((p) => p ? { ...p, owner_id: e.data.owner.id } : p); void call<Member[]>(`/projects/${active.id}/members`).then(setMembers); });
-    return () => { socket.emit('project:leave', active.id); socket.disconnect(); };
-  }, [active, call, token]);
+    socketRef.current = socket;
+    socket.on('connect', () => {
+      const projectId = activeRef.current?.id;
+      if (projectId) { socket.emit('project:join', projectId); joinedProjectRef.current = projectId; }
+      else joinedProjectRef.current = null;
+      refreshRealtimeData(projectId);
+    });
+    socket.on('disconnect', () => { joinedProjectRef.current = null; });
+    const syncTask = (event: RealtimeEvent<BoardTask>) => {
+      if (activeRef.current?.id === event.projectId) setTasks((old) => upsertTask(old, event.data));
+      void call<Dashboard>('/dashboard').then(setDashboard).catch(() => {});
+    };
+    socket.on('task.created', syncTask);
+    socket.on('task.updated', syncTask);
+    socket.on('task.moved', syncTask);
+    socket.on('task.assigned', (event: RealtimeEvent<BoardTask>) => {
+      syncTask(event);
+      const project = activeRef.current?.id === event.projectId ? activeRef.current : projectsRef.current.find((item) => item.id === event.projectId);
+      notify(event.eventId, `Ti è stato assegnato “${event.data.title}” in ${project?.name ?? `progetto #${event.projectId}`}.`);
+    });
+    socket.on('chat.message.created', (event: RealtimeEvent<ChatMessage>) => {
+      if (activeRef.current?.id === event.projectId) setMessages((old) => old.some((message) => message.id === event.data.id) ? old : [...old, event.data]);
+    });
+    socket.on('member.joined', (event: RealtimeEvent<{ member: Pick<Member, 'id' | 'display_name'> }>) => {
+      const project = activeRef.current?.id === event.projectId ? activeRef.current : projectsRef.current.find((item) => item.id === event.projectId);
+      notify(event.eventId, `${event.data.member.display_name} è entrato in ${project?.name ?? `progetto #${event.projectId}`}.`);
+      if (activeRef.current?.id === event.projectId) void call<Member[]>(`/projects/${event.projectId}/members`).then(setMembers).catch(() => {});
+    });
+    socket.on('member.left', (event: RealtimeEvent<{ member: Pick<Member, 'id' | 'display_name'>; reason: 'left' | 'removed' }>) => {
+      if (event.data.member.id === userRef.current?.id) {
+        const project = activeRef.current?.id === event.projectId ? activeRef.current : projectsRef.current.find((item) => item.id === event.projectId);
+        notify(event.eventId, `Non hai più accesso a ${project?.name ?? `progetto #${event.projectId}`}.`);
+        if (activeRef.current?.id === event.projectId) navigateHome();
+        void loadProjects();
+      } else if (activeRef.current?.id === event.projectId) {
+        setMembers((old) => old.filter((member) => member.id !== event.data.member.id));
+      }
+    });
+    socket.on('project.owner.transferred', (event: RealtimeEvent<{ owner: { id: number } }>) => {
+      if (activeRef.current?.id !== event.projectId) return;
+      setActive((project) => project ? { ...project, owner_id: event.data.owner.id } : project);
+      void call<Member[]>(`/projects/${event.projectId}/members`).then(setMembers).catch(() => {});
+    });
+    socket.on('report.created', (event: RealtimeEvent<{ category: string; reporter: { display_name: string } }>) => {
+      if (userRef.current?.role !== 'admin') return;
+      notify(event.eventId, `Nuova segnalazione (${event.data.category}) nel progetto #${event.projectId}, da ${event.data.reporter.display_name}.`);
+      if (modalRef.current === 'admin') void call<Report[]>('/admin/reports').then(setReports).catch(() => {});
+    });
+    return () => {
+      if (socketRef.current === socket) socketRef.current = null;
+      joinedProjectRef.current = null;
+      socket.disconnect();
+    };
+  }, [call, loadProjects, navigateHome, notify, refreshRealtimeData, token]);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+    const previous = joinedProjectRef.current;
+    const next = active?.id ?? null;
+    if (previous === next) return;
+    if (previous) socket.emit('project:leave', previous);
+    if (next) socket.emit('project:join', next);
+    joinedProjectRef.current = next;
+  }, [active?.id, token]);
 
   const filteredTasks = useMemo(() => tasks.filter((task) => task.title.toLowerCase().includes(search.toLowerCase()) && (priorityFilter === 'all' || task.priority === priorityFilter)), [priorityFilter, search, tasks]);
 
@@ -180,7 +269,7 @@ export default function App() {
   }
   async function logout() {
     try { await call('/auth/logout', { method: 'POST' }); } catch {}
-    setUser(null); setToken(''); navigateHome(false); setProjects([]); setCatalog([]); window.history.replaceState({}, '', '/');
+    setUser(null); setToken(''); setLiveNotifications([]); navigateHome(false); setProjects([]); setCatalog([]); window.history.replaceState({}, '', '/');
   }
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setError(''); setNotice('');
@@ -319,6 +408,7 @@ export default function App() {
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand-mark small">T</div><div className="breadcrumbs"><button onClick={() => navigateHome()}>TaskFlow</button><span>/</span><button onClick={() => navigateHome()}>Progetti</button>{active && <><span>/</span><strong>{active.name}{active.visibility === 'private' ? ' 🔒' : ''}</strong></>}</div><div className="topbar-spacer" /><label className="global-search"><span>⌕</span><input aria-label="Cerca task" placeholder="Cerca nella board" value={search} onChange={(e) => setSearch(e.target.value)} /><kbd>/</kbd></label><button className="avatar" title={user.email}>{user.display_name.slice(0, 1).toUpperCase()}</button><button className="text-button" onClick={() => void logout()}>Esci</button></header>
+    {!!liveNotifications.length && <aside className="live-notifications" aria-label="Notifiche in tempo reale">{liveNotifications.map((notification) => <div className="live-notification" key={notification.id} role="status">{notification.message}<button aria-label="Chiudi notifica" onClick={() => setLiveNotifications((items) => items.filter((item) => item.id !== notification.id))}>×</button></div>)}</aside>}
     {active ? <>
       <div className="project-titlebar"><div><div className="eyebrow">Progetto {active.visibility === 'private' ? 'privato' : 'pubblico'}{active.archived_at && ' · archiviato'}</div><h1>{active.name}</h1><p>{active.description || 'Aggiungi una descrizione al progetto.'}</p></div><div className="title-actions"><button className="outline-button" onClick={() => setModal('chat')}>☷ Chat <span className="count">{messages.length}</span></button><button className="outline-button" onClick={() => setModal('members')}>♙ Membri <span className="count">{members.length}</span></button><button className="primary-button compact" onClick={() => { setEditingTask({ id: 0, title: '', description: '', status: 'todo', priority: 'medium' }); setModal('task'); }} disabled={!!active.archived_at}>＋ Nuovo task</button></div></div>
       <nav className="view-tabs"><button className="active-tab">▦ Board</button><button onClick={() => setModal('chat')}>☷ Conversazione</button><div className="tab-spacer" /><select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Filtra priorità"><option value="all">Tutte le priorità</option><option value="high">Alta priorità</option><option value="medium">Media priorità</option><option value="low">Bassa priorità</option></select>{active.owner_id !== user.id && <button onClick={() => void reportProject()}>Segnala progetto</button>}{active.owner_id === user.id && <button onClick={() => { setProjectForm({ name: active.name, description: active.description, category: active.category, technologies: active.technologies, visibility: active.visibility }); setModal('project'); }}>Modifica progetto</button>}</nav>
