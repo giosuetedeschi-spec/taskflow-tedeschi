@@ -1,0 +1,213 @@
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import App from './App';
+
+vi.mock('socket.io-client', () => ({ io: () => ({ on: vi.fn(), emit: vi.fn(), disconnect: vi.fn() }) }));
+
+const reply = (body: unknown, status = 200) => new Response(body === null ? null : JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); Reflect.deleteProperty(navigator, 'clipboard'); window.history.replaceState({}, '', '/'); });
+
+describe('TaskFlow app flow', () => {
+  it('shows login errors, authenticates, loads the workspace and logs out', async () => {
+    const user = userEvent.setup();
+    const owner = { id: 3, display_name: 'Ada Demo', email: 'ada@example.test', role: 'user' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/auth/refresh')) return reply({ error: { message: 'Sessione assente' } }, 401);
+      if (path.endsWith('/auth/login')) {
+        const body = JSON.parse(String(init?.body));
+        return body.password === 'correct horse battery'
+          ? reply({ user: owner, accessToken: 'test.jwt.token' })
+          : reply({ error: { message: 'Credenziali non valide' } }, 401);
+      }
+      if (path.endsWith('/auth/logout')) return reply(null, 204);
+      if (path.endsWith('/dashboard')) return reply({ createdProjects: [], joinedProjects: [], assignedTasks: [] });
+      if (path.endsWith('/projects')) return reply({ projects: [], catalog: [] });
+      return reply({ error: { message: 'Not found' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+
+    await user.type(await screen.findByLabelText('Email'), owner.email);
+    await user.type(screen.getByLabelText('Password'), 'incorrect password');
+    await user.click(screen.getByRole('button', { name: 'Accedi' }));
+    expect(await screen.findByText('Credenziali non valide')).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText('Password'));
+    await user.type(screen.getByLabelText('Password'), 'correct horse battery');
+    await user.click(screen.getByRole('button', { name: 'Accedi' }));
+    expect(await screen.findByText('Ciao Ada Demo, ecco cosa succede nei tuoi progetti.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apri elenco progetti' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Esci' }));
+    expect(await screen.findByRole('heading', { name: 'Accedi a TaskFlow' })).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/auth/logout', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('registers a user, creates a project and opens its three-column board', async () => {
+    const user = userEvent.setup();
+    const owner = { id: 1, display_name: 'Ada Lovelace', email: 'ada@example.test', role: 'user' };
+    const project = { id: 7, owner_id: 1, name: 'Progetto demo', description: '', category: 'Altro', technologies: '', visibility: 'private', archived_at: null, hidden_at: null, cover_path: null, role: 'owner' };
+    const catalogProject = { ...project, id: 8, owner_id: 2, name: 'Progetto filtrato', category: 'Design', technologies: 'React', visibility: 'public', role: 'visitor' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/auth/refresh')) return reply({ error: { message: 'Scaduta' } }, 401);
+      if (path.endsWith('/auth/register')) return reply({ user: owner, accessToken: 'test.jwt.token' }, 201);
+      if (path.endsWith('/api/v1/projects') && init?.method === 'POST') return reply(project, 201);
+      if (path.endsWith('/api/v1/projects/7/tasks') && init?.method === 'POST') return reply({ id: 21, project_id: 7, title: 'Task creato dalla UI', description: '', status: 'todo', priority: 'medium' }, 201);
+      if (path.endsWith('/api/v1/tasks/21') && init?.method === 'PATCH') return reply({ id: 21, project_id: 7, title: 'Task creato dalla UI', description: '', status: 'doing', priority: 'medium' });
+      if (path.endsWith('/api/v1/projects/7/invites') && init?.method === 'POST') return reply({ link: 'http://localhost:5173/invite/demo-token', email: init?.body ? JSON.parse(String(init.body)).email : null }, 201);
+      if (path.endsWith('/dashboard')) return reply({ createdProjects: [project], joinedProjects: [], assignedTasks: [{ id: 9, project_id: 7, project_name: project.name, title: 'Revisionare il flusso demo', description: '', status: 'todo', priority: 'high', due_date: '2026-10-11' }] });
+      if (path.includes('/api/v1/projects?')) return reply({ projects: [project], catalog: [catalogProject] });
+      if (path.endsWith('/api/v1/projects')) return reply({ projects: [project], catalog: [] });
+      if (path.endsWith('/api/v1/projects/7')) return reply(project);
+      if (path.endsWith('/tasks')) return reply([]);
+      if (path.endsWith('/members')) return reply([{ id: 1, display_name: 'Ada Lovelace', email: owner.email, is_owner: 1 }]);
+      if (path.endsWith('/messages') && init?.method === 'POST') return reply({ id: 10, project_id: 7, user_id: 1, author_name: owner.display_name, text: 'File demo', attachments: [] }, 201);
+      if (path.endsWith('/messages')) return reply({ items: [] });
+      return reply({ error: { message: 'Not found' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const writeClipboard = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: writeClipboard } });
+
+    render(<App />);
+    await user.click(await screen.findByRole('button', { name: 'Crea un account' }));
+    await user.type(screen.getByLabelText('Nome visualizzato'), 'Ada Lovelace');
+    await user.type(screen.getByLabelText('Email'), owner.email);
+    await user.type(screen.getByLabelText('Password'), 'correct horse battery');
+    await user.click(screen.getByRole('button', { name: 'Registrati' }));
+    await user.click(await screen.findByRole('button', { name: '＋ Nuovo progetto' }));
+    await user.type(screen.getByLabelText('Nome'), 'Progetto demo');
+    await user.click(screen.getByRole('button', { name: 'Salva progetto' }));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Da fare' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'In corso' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Completato' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Elimina progetto' }).querySelector('svg')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Nuovo task/ }));
+    await user.type(screen.getByLabelText('Titolo'), 'Task creato dalla UI');
+    await user.click(screen.getByRole('button', { name: 'Salva task' }));
+    expect(await screen.findByRole('button', { name: 'Task creato dalla UI' })).toBeInTheDocument();
+    await user.click(document.querySelector('.move-button') as HTMLButtonElement);
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/tasks/21', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('doing') }));
+    await waitFor(() => {
+      const columns = document.querySelectorAll('.board-column');
+      expect(columns[0]).not.toHaveTextContent('Task creato dalla UI');
+      expect(columns[1]).toHaveTextContent('Task creato dalla UI');
+      expect(columns[1]?.querySelectorAll('.task-card')).toHaveLength(1);
+    });
+    await user.click(screen.getByRole('button', { name: /Membri/ }));
+    await user.click(await screen.findByRole('button', { name: /Crea link di invito/ }));
+    expect(await screen.findByRole('textbox', { name: 'Link invito' })).toHaveValue('http://localhost:5173/invite/demo-token');
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Link creato e copiato negli appunti.');
+    expect(writeClipboard).toHaveBeenCalledWith('http://localhost:5173/invite/demo-token');
+    await user.click(screen.getByRole('button', { name: 'Copia link' }));
+    expect(writeClipboard).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Link copiato negli appunti.');
+    writeClipboard.mockRejectedValueOnce(new Error('Clipboard non disponibile'));
+    await user.click(screen.getByRole('button', { name: 'Copia link' }));
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Seleziona il link e copialo');
+    await user.type(screen.getByRole('textbox', { name: 'Email invitato' }), 'luca@example.test');
+    await user.click(screen.getByRole('button', { name: 'Invita via email' }));
+    expect(await screen.findByRole('textbox', { name: 'Email invitato' })).toHaveValue('');
+    expect(document.querySelector('.invite-link [role="status"]')).toHaveTextContent('Invito per luca@example.test creato e copiato negli appunti.');
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/projects/7/invites', expect.objectContaining({ method: 'POST', body: JSON.stringify({ email: 'luca@example.test' }) }));
+    await user.click(screen.getByRole('button', { name: 'Chiudi' }));
+    await user.click(screen.getByRole('button', { name: /Chat/ }));
+    const chatInput = screen.getByPlaceholderText(/Scrivi un messaggio/);
+    await user.type(chatInput, 'File demo');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    expect(chatInput).toHaveValue('File demo\n');
+    await user.type(chatInput, 'seconda riga');
+    const files = [new File(['primo'], 'primo.txt', { type: 'text/plain' }), new File(['secondo'], 'secondo.txt', { type: 'text/plain' })];
+    const fileInput = screen.getByLabelText(/Allega fino a 5 file/);
+    await user.upload(fileInput, files);
+    expect((fileInput as HTMLInputElement).files).toHaveLength(2);
+    await user.click(chatInput);
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/projects/7/messages'), expect.objectContaining({ method: 'POST', body: expect.any(FormData) })));
+    const sentMessage = fetchMock.mock.calls.find(([path, init]) => String(path).endsWith('/projects/7/messages') && init?.method === 'POST')?.[1]?.body as FormData;
+    expect(sentMessage.get('text')).toBe('File demo\nseconda riga');
+    expect(window.location.pathname).toBe('/projects/7');
+    expect(chatInput).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Chiudi chat' })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/auth/logout', expect.anything());
+    await user.type(chatInput, 'Invio con pulsante');
+    await user.click(screen.getByRole('button', { name: 'Invia ↗' }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([path, init]) => String(path).endsWith('/projects/7/messages') && init?.method === 'POST')).toHaveLength(2));
+    expect(window.location.pathname).toBe('/projects/7');
+    expect(chatInput).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: 'Chiudi chat' }));
+    await user.click(screen.getByRole('button', { name: 'Progetti' }));
+    expect(await screen.findByText('Revisionare il flusso demo')).toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Filtra catalogo per categoria' }), 'Design');
+    await user.type(screen.getByRole('textbox', { name: 'Filtra catalogo per tecnologia' }), 'React');
+    await user.type(screen.getByLabelText('Data iniziale catalogo'), '2026-01-01');
+    await user.type(screen.getByLabelText('Data finale catalogo'), '2026-12-31');
+    await user.click(screen.getByRole('button', { name: 'Filtra' }));
+    expect(await screen.findByText('Progetto filtrato')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/v1/projects?category=Design&technology=React&createdFrom=2026-01-01&createdTo=2026-12-31'), expect.any(Object));
+  }, 15_000);
+
+  it('ignores a late project response after navigating back to the project list', async () => {
+    const user = userEvent.setup();
+    const owner = { id: 1, display_name: 'Ada Lovelace', email: 'ada@example.test', role: 'user' };
+    const project = { id: 7, owner_id: 1, name: 'Progetto lento', description: '', category: 'Altro', technologies: '', visibility: 'private', archived_at: null, hidden_at: null, cover_path: null, role: 'owner' };
+    let resolveProject!: (response: Response) => void;
+    let projectRequested = false;
+    const delayedProject = new Promise<Response>((resolve) => { resolveProject = resolve; });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/auth/refresh')) return reply({ error: { message: 'Sessione assente' } }, 401);
+      if (path.endsWith('/auth/login')) return reply({ user: owner, accessToken: 'test.jwt.token' });
+      if (path.endsWith('/dashboard')) return reply({ createdProjects: [project], joinedProjects: [], assignedTasks: [] });
+      if (path.endsWith('/api/v1/projects')) return reply({ projects: [project], catalog: [] });
+      if (path.endsWith('/api/v1/projects/7')) { projectRequested = true; return delayedProject; }
+      if (path.endsWith('/tasks') || path.endsWith('/members')) return reply([]);
+      return reply({ error: { message: 'Not found' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+
+    await user.type(await screen.findByLabelText('Email'), owner.email);
+    await user.type(screen.getByLabelText('Password'), 'correct horse battery');
+    await user.click(screen.getByRole('button', { name: 'Accedi' }));
+    await user.click(await screen.findByRole('button', { name: /Progetto lento/ }));
+    await waitFor(() => expect(projectRequested).toBe(true));
+    await user.click(screen.getByRole('button', { name: 'Progetti' }));
+    resolveProject(reply(project));
+
+    expect(await screen.findByText('Ciao Ada Lovelace, ecco cosa succede nei tuoi progetti.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Da fare' })).not.toBeInTheDocument());
+  });
+
+  it('loads admin queues and removes a reviewed report from the pending list', async () => {
+    const user = userEvent.setup();
+    const admin = { id: 4, display_name: 'Sara Admin', email: 'sara@example.test', role: 'admin' };
+    const report = { id: 12, project_id: 8, reporter_id: 5, category: 'spam', details: '', status: 'pending', project_name: 'Progetto segnalato', reporter_name: 'Luca' };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/auth/refresh')) return reply({ error: { message: 'Sessione assente' } }, 401);
+      if (path.endsWith('/auth/login')) return reply({ user: admin, accessToken: 'admin.jwt.token' });
+      if (path.endsWith('/dashboard')) return reply({ createdProjects: [], joinedProjects: [], assignedTasks: [] });
+      if (path.endsWith('/projects')) return reply({ projects: [], catalog: [] });
+      if (path.endsWith('/admin/reports') && init?.method !== 'PATCH') return reply([report]);
+      if (path.endsWith('/admin/hidden-projects') || path.endsWith('/admin/blocked-users')) return reply([]);
+      if (path.endsWith('/admin/reports/12') && init?.method === 'PATCH') return reply({ updated: true });
+      return reply({ error: { message: 'Not found' } }, 404);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<App />);
+    await user.type(await screen.findByLabelText('Email'), admin.email);
+    await user.type(screen.getByLabelText('Password'), 'correct horse battery');
+    await user.click(screen.getByRole('button', { name: 'Accedi' }));
+    await user.click(await screen.findByRole('button', { name: 'Area amministrazione' }));
+    expect(await screen.findByRole('heading', { name: 'Console amministratore' })).toBeInTheDocument();
+    expect(screen.getByText('Progetto segnalato')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Accogli e nascondi progetto' }));
+    await waitFor(() => expect(screen.queryByText('Progetto segnalato')).not.toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/admin/reports/12', expect.objectContaining({ method: 'PATCH' }));
+  });
+});

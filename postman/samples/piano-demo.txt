@@ -1,0 +1,1 @@
+Piano inventato per verificare più allegati nello stesso messaggio TaskFlow.

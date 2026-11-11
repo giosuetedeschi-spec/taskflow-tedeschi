@@ -1,0 +1,28 @@
+[Unit]
+Description=TaskFlow web application
+After=network.target
+
+[Service]
+Type=simple
+User=taskflow
+Group=taskflow
+WorkingDirectory=/opt/taskflow/current
+EnvironmentFile=/etc/taskflow/taskflow.env
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=HOME=/var/lib/taskflow
+ExecStart=/opt/taskflow/current/runtime/bun run apps/api/dist/server.js
+Restart=on-failure
+RestartSec=5
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+StateDirectory=taskflow
+StateDirectoryMode=0750
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/taskflow
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

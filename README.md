@@ -1,1 +1,60 @@
-# taskflow-tedeschi
+# TaskFlow
+
+TaskFlow è una piattaforma collaborativa per organizzare progetti di gruppo, attività e conversazioni. I progetti pubblici sono esplorabili da un catalogo; gli amministratori gestiscono segnalazioni e moderazione.
+
+## Stato del progetto
+
+MVP locale completo e pronto da provare: workspace Bun, API Express, interfaccia React, persistenza SQLite e test automatici. Funzioni incluse e istruzioni sono nella [Definition of Done](dod/README.md).
+
+## Stack scelto
+
+- **Toolchain:** Bun come package manager; il requisito della traccia relativo a npm è intenzionalmente trascurato.
+- **Runtime backend:** Bun.
+- **Frontend:** React e TypeScript.
+- **Backend e API:** Express e TypeScript, con API REST e autenticazione JWT.
+- **Database MVP:** SQLite integrato in Bun (`bun:sqlite`); non richiede un server separato.
+- **Aggiornamenti live:** Socket.IO con eventi nominati e payload JSON.
+- **Email in sviluppo:** mock integrato che stampa nel terminale destinatario, oggetto e link, senza invio esterno.
+
+Le versioni stabili sono uno snapshot da ricontrollare all'avvio dell'implementazione; le scelte e le note di compatibilità sono documentate nei requisiti.
+
+## Funzionalità previste
+
+- Account, accesso e recupero password.
+- Progetti pubblici o privati, catalogo, inviti e gestione dei membri.
+- Bacheca task con stati, priorità, scadenze e assegnatari.
+- Chat di progetto con cronologia, allegati e aggiornamenti in tempo reale.
+- Segnalazioni, moderazione e strumenti amministrativi.
+
+L'applicazione funziona in sviluppo locale e può essere avviata in produzione dietro reverse proxy/tunnel HTTPS. La configurazione di CT138 è descritta in [Deployment web su CT138](docs/deployment-ct138.md); il progetto non crea o modifica infrastruttura.
+
+## Documentazione
+
+- [Requisiti e specifiche](docs/requisiti-e-specifiche.md): decisioni, tecnologie, requisiti d'ambiente e aspetti ancora da definire.
+- [Decisioni e domande](docs/decisioni-e-domande.md): domande residue e risposte operative adottate per architettura, sicurezza e flussi.
+- [Piano di sviluppo](docs/piano-sviluppo.md): ordine proposto per realizzare le funzionalità.
+- [Indice della documentazione](docs/README.md).
+- [Casi di accettazione e test previsti](tests/README.md), separati per backend e frontend.
+- [Definition of Done MVP](dod/README.md): funzionalità, avvio, flusso demo e criteri di completamento.
+
+## Ambiente di sviluppo
+
+Ambiente richiesto: Windows e Bun 1.4 o successivo. Database e allegati sono locali; non servono Docker, MySQL o servizi esterni.
+
+```powershell
+bun install
+bun run seed:demo    # facoltativo: crea utenti e dati demo fittizi
+bun run seed:admin   # facoltativo: crea un admin con credenziali proprie
+bun run dev
+```
+
+Aprire <http://localhost:5173>. Il mock email mostra nel terminale API i link di invito e recupero password.
+Il seed demo è solo locale e usa account `@example.test`; credenziali e flusso Postman sono in [postman/README.md](postman/README.md).
+
+## Produzione
+
+Il build produce frontend e API avviabili sullo stesso origin (`bun run build`, `bun run start`). Impostare le variabili richieste in `.env.example`; mantenere database SQLite e allegati su storage persistente. Inviti via email e recupero password restano disabilitati in produzione finché non viene integrato un provider email.
+
+## Consegna
+
+**Scadenza: 8 novembre 2026.** La consegna richiede un'applicazione Node.js funzionante, API REST, persistenza su database, gestione appropriata degli errori e documentazione delle scelte implementative.
