@@ -1,10 +1,12 @@
 """Headless browser smoke check. Requires the Python playwright package and Chromium.
 
-Read-only by default. --full creates disposable example.test accounts and a
-private test project on the target server; use it only on a test deployment.
+Read-only by default. --full creates example.test accounts and a private test
+project on the target server. Pass reusable accounts with --owner-email,
+--member-email, --password-env and --existing for repeat runs.
 """
 
 import argparse
+import os
 import re
 import secrets
 from datetime import datetime, timezone
@@ -16,6 +18,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="https://taskflow.gabrielateleaga.com")
     parser.add_argument("--full", action="store_true", help="Create test accounts, project, task and chat messages")
+    parser.add_argument("--owner-email", help="Reusable owner account for --full")
+    parser.add_argument("--member-email", help="Reusable member account for --full")
+    parser.add_argument("--password-env", help="Environment variable containing the demo password")
+    parser.add_argument("--existing", action="store_true", help="Log in to the supplied demo accounts instead of registering them")
     parser.add_argument("--screenshot", help="Save a screenshot of the login page")
     parser.add_argument("--browser-executable", help="Use an installed Chromium-family browser instead of Playwright's bundled one")
     args = parser.parse_args()
@@ -43,20 +49,21 @@ def main() -> None:
 
         if args.full:
             stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-            owner_email = f"browser.owner.{stamp}@example.test"
-            member_email = f"browser.member.{stamp}@example.test"
-            password = "TaskflowSmoke-" + secrets.token_urlsafe(18)
+            owner_email = args.owner_email or f"browser.owner.{stamp}@example.test"
+            member_email = args.member_email or f"browser.member.{stamp}@example.test"
+            password = os.environ[args.password_env] if args.password_env else "TaskflowSmoke-" + secrets.token_urlsafe(18)
             project_name = f"Verifica browser {stamp}"
             task_name = f"Task verifica {stamp}"
             message = f"Messaggio verifica {stamp}"
 
-            page.get_by_role("button", name="Crea un account").click()
-            page.get_by_label("Nome visualizzato").fill("Browser Owner Demo")
+            if not args.existing:
+                page.get_by_role("button", name="Crea un account").click()
+                page.get_by_label("Nome visualizzato").fill("Browser Owner Demo")
             page.get_by_label("Email").fill(owner_email)
             page.get_by_label("Password").fill(password)
-            page.get_by_role("button", name="Registrati").click()
+            page.get_by_role("button", name="Accedi" if args.existing else "Registrati", exact=True).click()
             expect(page.get_by_role("heading", name="Progetti", exact=True)).to_be_visible()
-            print("PASS: registration and login")
+            print("PASS: account registration or login")
 
             page.get_by_role("button", name=re.compile("Nuovo progetto")).click()
             page.get_by_label("Nome", exact=True).fill(project_name)
@@ -120,14 +127,24 @@ def main() -> None:
             member_page = member_context.new_page()
             member_page.on("pageerror", lambda error: errors.append(str(error)))
             member_page.goto(invite_link, wait_until="networkidle", timeout=20_000)
-            member_page.get_by_role("button", name="Crea un account").click()
-            member_page.get_by_label("Nome visualizzato").fill("Browser Member Demo")
+            if not args.existing:
+                member_page.get_by_role("button", name="Crea un account").click()
+                member_page.get_by_label("Nome visualizzato").fill("Browser Member Demo")
             member_page.get_by_label("Email").fill(member_email)
             member_page.get_by_label("Password").fill(password)
-            member_page.get_by_role("button", name="Registrati").click()
+            member_page.get_by_role("button", name="Accedi" if args.existing else "Registrati", exact=True).click()
             expect(member_page.get_by_role("heading", name=project_name)).to_be_visible(timeout=10_000)
             expect(member_page.locator(".task-card", has_text=task_name)).to_have_count(1)
             print("PASS: second account accepts invite and sees board")
+            expect(page.get_by_label("Notifiche in tempo reale")).to_contain_text("è entrato", timeout=10_000)
+            print("PASS: owner receives live member notification")
+
+            page.get_by_role("button", name="Chiudi", exact=True).click()
+            page.get_by_role("button", name=task_name).click()
+            page.get_by_label("Assegnatario").select_option(label="Browser Member Demo")
+            page.get_by_role("button", name="Salva task").click()
+            expect(member_page.get_by_label("Notifiche in tempo reale")).to_contain_text("Ti è stato assegnato", timeout=10_000)
+            print("PASS: member receives live task assignment notification")
             member_context.close()
 
         assert not errors, f"Browser JavaScript errors: {errors}"
